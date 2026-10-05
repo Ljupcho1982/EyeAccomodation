@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="mk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Навигатор</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  :root { --bg:#fff; --fg:#111; --muted:#555; --card:#f3f4f6; --accent:#0b5fff; --warn:#b42318; --ok:#067647; --border:#c9ced6; --fs:1; }
+  :root[data-contrast="high"] { --bg:#000; --fg:#fff; --muted:#ddd; --card:#111; --accent:#ffd400; --warn:#ff8a80; --ok:#7CFC9a; --border:#fff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-contrast]) { --bg:#101114; --fg:#f2f3f5; --muted:#b3b8c2; --card:#1b1d22; --accent:#6ea0ff; --border:#3a3f4a; --warn:#ff8a80; --ok:#6ee7a0; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:calc(16px*var(--fs))/1.45 system-ui, sans-serif; }
+  header, main { max-width: 1100px; margin: 0 auto; padding: 12px 16px; }
+  h1 { margin:0; font-size:1.4em; } h2 { font-size:1.05em; margin:0 0 8px; }
+  .grid { display:grid; gap:16px; grid-template-columns: 1fr; }
+  @media (min-width: 900px) { .grid { grid-template-columns: 340px 1fr; } }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px; }
+  label { display:block; margin:8px 0 2px; font-weight:600; }
+  select, input[type=number], input[type=text] { width:100%; padding:10px; font-size:1em; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--fg); }
+  button { font-size:1em; padding:12px 14px; min-height:44px; border-radius:8px; border:2px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  :root[data-contrast="high"] button { color:#000; }
+  button.secondary, :root[data-contrast="high"] button.secondary { background:transparent; color:var(--accent); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline:3px solid var(--fg); outline-offset:2px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  canvas { width:100%; height:auto; border:1px solid var(--border); border-radius:8px; background:var(--bg); touch-action:none; }
+  #status { font-weight:700; padding:8px 10px; border-radius:8px; border:2px solid var(--border); margin-bottom:8px; }
+  #status.navigating { border-color:var(--ok); } #status.stopped { border-color:var(--warn); color:var(--warn); }
+  #haptic { display:inline-block; min-width:9em; padding:4px 8px; border-radius:6px; border:1px solid var(--border); }
+  #log { max-height:200px; overflow:auto; margin:8px 0 0; padding-left:18px; }
+  .warn { color:var(--warn); } .small { font-size:.85em; color:var(--muted); }
+  .check { display:flex; gap:8px; align-items:center; margin-top:8px; font-weight:600; } .check input { width:22px; height:22px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="t-title">Навигатор</h1>
+  <p class="small" id="t-sub">Симулатор. Демо на просторија 6×5 m. Не е замена за бастон или куче водич.</p>
+</header>
+<main class="grid">
+  <section class="card" aria-labelledby="t-profile">
+    <h2 id="t-profile">Профил</h2>
+    <label for="preset">Основа</label>
+    <select id="preset">
+      <option value="blind">Слеп / без светлосна перцепција</option>
+      <option value="lowvision" selected>Слабовиден</option>
+      <option value="wheelchair">Количка</option>
+      <option value="combined">Количка + слабовиден</option>
+    </select>
+    <label for="acuity">Острина на вид по корекција (0–1,2)</label>
+    <input id="acuity" type="number" min="0" max="1.2" step="0.01" value="0.15">
+    <p class="small" id="t-acuity-help">Не диоптрија. Пр. 0,1 = 20/200. Мерена со очила или леќи.</p>
+    <label for="field">Видно поле</label>
+    <select id="field">
+      <option value="none">Нормално</option><option value="tunnel">Тунелски вид</option>
+      <option value="left">Губиток лево</option><option value="right">Губиток десно</option><option value="central">Централен губиток</option>
+    </select>
+    <label for="light">Светлосна перцепција</label>
+    <select id="light"><option value="normal">Нормална</option><option value="light-only">Само светлина/сенка</option><option value="none">Нема</option></select>
+    <div id="wheel-fields">
+      <label for="width">Ширина на количка (cm)</label>
+      <input id="width" type="number" min="60" max="120" value="65">
+      <label for="thr">Најмногу што минува праг (cm)</label>
+      <input id="thr" type="number" min="0" max="8" step="0.5" value="2">
+    </div>
+    <label for="approved">Профилот го потврдил</label>
+    <select id="approved"><option value="self">Јас сам</option><option value="professional">Стручно лице (О&amp;М / лекар)</option></select>
+    <label for="lang">Јазик</label>
+    <select id="lang"><option value="mk">Македонски</option><option value="en">English</option></select>
+    <div class="row"><button id="apply">Примени профил</button></div>
+    <ul id="warnings" class="warn" aria-live="polite"></ul>
+    <h2 style="margin-top:16px" id="t-vault">Енкриптирано на уредот</h2>
+    <div class="row"><button class="secondary" id="saveBtn">Зачувај</button><button class="secondary" id="loadBtn">Вчитај</button></div>
+  </section>
+
+  <section class="card" aria-labelledby="t-nav">
+    <h2 id="t-nav">Навигација</h2>
+    <div id="status" role="status" aria-live="assertive">—</div>
+    <canvas id="map" width="720" height="600" aria-label="Мапа на просторијата"></canvas>
+    <p class="small" id="t-click">Кликни на мапата за да додадеш нов предмет (висина 40 cm).</p>
+    <div class="row" id="dests"></div>
+    <div class="row">
+      <button id="stopBtn" class="secondary">Стоп</button>
+      <button id="resumeBtn" class="secondary">Продолжи</button>
+      <button id="lostBtn" class="secondary">Изгуби локализација</button>
+      <button id="relocBtn" class="secondary">Потврди локација</button>
+      <button id="micBtn" class="secondary">🎤</button>
+    </div>
+    <label for="cmd">Команда (текст или глас)</label>
+    <div class="row"><input id="cmd" type="text" placeholder="оди до кујна" style="flex:1"><button id="cmdBtn">OK</button></div>
+    <p>Вибрација: <span id="haptic">—</span></p>
+    <ol id="log" aria-live="polite"></ol>
+  </section>
+</main>
+<script type="module" src="src/app.js"></script>
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});</script>
+</body>
+</html>
