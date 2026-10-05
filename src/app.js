@@ -53,6 +53,7 @@ const I18N = {
     saved: 'Зачувано, шифрирано.', loaded: 'Вчитано.', none: 'Нема зачувано.', wrong: 'Погрешна лозинка.', needPass: 'Внеси лозинка.', noStore: 'Прелистувачот не дозволува зачувување.',
     micNo: 'Микрофонот не е достапен тука. Користи го полето.',
     anchorHint: 'Насочи ја камерата кон маркерот на ѕидот или кажи „потврди локација“ на почетната точка.',
+    depth: 'Длабочина (Depth API)', depthOn: 'Длабочината е вклучена.', depthOff: 'Длабочината е исклучена: само ретки точки.',
     markerFound: 'Маркерот е пронајден.', needTracking: 'Почекај, телефонот уште ја наоѓа околината.',
     markerOnly: 'Оваа мапа користи маркер. Насочи ја камерата кон него.',
     locOk: 'Локацијата е потврдена.', resetDone: 'Демото е вратено на почеток.',
@@ -97,6 +98,7 @@ const I18N = {
     saved: 'Saved, encrypted.', loaded: 'Loaded.', none: 'Nothing saved.', wrong: 'Wrong passphrase.', needPass: 'Enter a passphrase.', noStore: 'This browser blocks saving.',
     micNo: 'Microphone not available here. Use the text box.',
     anchorHint: 'Point the camera at the marker on the wall, or say "confirm location" at the start point.',
+    depth: 'Depth (Depth API)', depthOn: 'Depth is on.', depthOff: 'Depth is off: sparse points only.',
     markerFound: 'Marker found.', needTracking: 'Wait, the phone is still finding its surroundings.',
     markerOnly: 'This map uses a marker. Point the camera at it.',
     locOk: 'Location confirmed.', resetDone: 'Demo restored.',
@@ -122,6 +124,8 @@ let lastFrame = null;
 let hintAt = -Infinity;
 let pointMap = new PointMap(grid, aligner);
 let arTracking = 'STOPPED';
+let depthOn = true;
+let depthSeen = false;
 let settings;
 let nav;
 let analysis;
@@ -596,6 +600,10 @@ $('relocBtn').addEventListener('click', () => {
   render();
 });
 $('resetBtn').addEventListener('click', reset);
+$('depthToggle').addEventListener('change', () => {
+  depthOn = $('depthToggle').checked;
+  log(depthOn ? L.depthOn : L.depthOff);
+});
 $('map').addEventListener('click', (e) => {
   const rect = $('map').getBoundingClientRect();
   const v = view($('map'));
@@ -680,8 +688,13 @@ window.__arFrame = (f) => {
   lastFrame = f;
   const wasReady = aligner.ready;
   const wasLost = nav.state === 'stopped' && nav.reason === 'localization_lost';
-  const r = handleFrame({ f, nav, aligner, pointMap, now: performance.now() });
+  if (f.depth !== undefined && !depthSeen) {
+    depthSeen = true;
+    $('depthRow').hidden = false;
+  }
+  const r = handleFrame({ f, nav, aligner, pointMap, now: performance.now(), useDepth: depthOn });
   if (r.pose) pose = r.pose;
+  if (r.mapChanged) analysis = analyze(grid, settings);
   if (r.anchored && (!wasReady || wasLost)) speak(L.markerFound);
   if (!aligner.ready && performance.now() - hintAt > 10000) {
     hintAt = performance.now();

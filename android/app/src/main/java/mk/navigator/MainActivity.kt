@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private var session: Session? = null
     private var installRequested = false
     private var pageReady = false
+    private var depthSupported = false
 
     private val permissions = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
@@ -69,7 +70,7 @@ class MainActivity : AppCompatActivity() {
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
             preserveEGLContextOnPause = true
-            setRenderer(ArFrames({ session }, { displayRotation() }) { json -> js("window.__arFrame($json)") })
+            setRenderer(ArFrames({ session }, { displayRotation() }, { depthSupported }) { json -> js("window.__arFrame($json)") })
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
 
@@ -136,6 +137,9 @@ class MainActivity : AppCompatActivity() {
                         updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                         focusMode = Config.FocusMode.AUTO
                         augmentedImageDatabase = markerDatabase(s)
+                        // Depth API: dense depth from the camera pair or ToF, where the phone supports it.
+                        depthSupported = s.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+                        if (depthSupported) depthMode = Config.DepthMode.AUTOMATIC
                     })
                 }
             }

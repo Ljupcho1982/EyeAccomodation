@@ -137,3 +137,92 @@ test('seeing the marker clears the relocalize gate, but never re-pins a walking 
   assert.equal(r.anchored, 'marker');
   assert.equal(nav.needsRelocalize, false);
 });
+
+// ---- Depth API --------------------------------------------------------------
+function depthSetup() {
+  const g = new Grid(1200, 1200);
+  const a = new Aligner({ x: 600, y: 600, heading: 0 });
+  a.startFromCamera({ x: 0, z: 0, fx: 0, fz: -1 });
+  const pm = new PointMap(g, a);
+  const pose = a.pose({ x: 0, z: 0, fx: 0, fz: -1 });
+  return { g, a, pm, pose, floorY: -1.2 };
+}
+
+test('depth: floor noise at close range is ignored, a 12 cm object at 1 m is seen', () => {
+  const { pm, pose, floorY } = depthSetup();
+  // floor points with 3 cm of noise
+  assert.equal(pm.ingestDepth([0, floorY + 0.03, -1, 0.01, floorY + 0.03, -1], floorY, pose).add.length, 0);
+  // a 12 cm object: two votes suffice
+  const d = pm.ingestDepth([0.5, floorY + 0.12, -1, 0.5, floorY + 0.12, -1], floorY, pose);
+  assert.equal(d.add.length, 1);
+  assert.ok(Math.abs(d.add[0].height - 12) < 0.01);
+});
+
+test('depth: tolerance widens with range (8 cm bump at 3 m is treated as floor noise)', () => {
+  const { pm, pose, floorY } = depthSetup();
+  assert.ok(PointMap.depthFloorTolCm(300) > PointMap.depthFloorTolCm(100));
+  const d = pm.ingestDepth([0, floorY + 0.08, -3, 0, floorY + 0.08, -3], floorY, pose);
+  assert.equal(d.add.length, 0);
+});
+
+test('depth: a moved chair is cleared after floor is seen for a while, a table seen from above is not', () => {
+  const { g, pm, pose, floorY } = depthSetup();
+  const chair = [0.2, floorY + 0.45, -1.5];
+  const floorThere = [0.2, floorY + 0.01, -1.5];
+  // chair seen
+  let d = pm.ingestDepth([...chair, ...chair], floorY, pose);
+  assert.equal(d.add.length, 1);
+  g.setRect(d.add[0].x0, d.add[0].y0, d.add[0].x1, d.add[0].y1, d.add[0].height);
+  // chair gone: floor seen in the same cell. Not cleared right away (quiet period).
+  for (let i = 0; i < 10; i++) d = pm.ingestDepth(floorThere, floorY, pose);
+  assert.equal(g.h[g.idx(124, 90)] > 0, true);
+  let cleared = 0;
+  for (let i = 0; i < 40; i++) cleared += pm.ingestDepth(floorThere, floorY, pose).clear.length;
+  assert.equal(cleared, 1);
+
+  // table: floor under it is seen, but the top keeps being seen too, so it stays.
+  const { g: g2, pm: pm2, pose: pose2, floorY: fy } = depthSetup();
+  const top = [0.2, fy + 0.75, -1.5];
+  const under = [0.2, fy + 0.01, -1.5];
+  const t = pm2.ingestDepth([...top, ...top], fy, pose2);
+  g2.setRect(t.add[0].x0, t.add[0].y0, t.add[0].x1, t.add[0].y1, t.add[0].height);
+  let wrongClears = 0;
+  for (let i = 0; i < 60; i++) wrongClears += pm2.ingestDepth([...top, ...under, ...under], fy, pose2).clear.length;
+  assert.equal(wrongClears, 0);
+});
+
+test('depth: walls (tall cells) are never cleared by floor votes', () => {
+  const { g, pm, pose, floorY } = depthSetup();
+  const wall = [0.2, floorY + 1.6, -1.5];
+  const d = pm.ingestDepth([...wall, ...wall], floorY, pose);
+  g.setRect(d.add[0].x0, d.add[0].y0, d.add[0].x1, d.add[0].y1, d.add[0].height);
+  let cleared = 0;
+  for (let i = 0; i < 80; i++) cleared += pm.ingestDepth([0.2, floorY + 0.01, -1.5], floorY, pose).clear.length;
+  assert.equal(cleared, 0);
+});
+
+test('handleFrame: depth obstacle on the route reroutes; depth can be switched off', () => {
+  const g = new Grid(1200, 1200);
+  g.addBorder(5);
+  const settings = deriveSettings(makeProfile({ preset: 'lowvision' }).profile);
+  const dests = [{ id: 'goal', pos: { x: 600, y: 300 }, names: { mk: ['цел'], en: ['goal'] } }];
+  const make = () => {
+    const grid = new Grid(1200, 1200);
+    grid.addBorder(5);
+    const nav = new Navigator({ grid, destinations: dests, settings });
+    const aligner = new Aligner({ x: 600, y: 600, heading: 0 });
+    aligner.startFromCamera({ x: 0, z: 0, fx: 0, fz: -1 });
+    return { nav, aligner, pointMap: new PointMap(grid, aligner) };
+  };
+  const base = { tracking: 'TRACKING', x: 0, z: 0, fx: 0, fz: -1, floorY: -1.2, points: [] };
+  const box = [0, -0.8, -1.5, 0, -0.8, -1.5, 0.01, -0.8, -1.5];
+  const on = make();
+  on.nav.goTo('goal', on.aligner.pose(base), 0);
+  const r = handleFrame({ f: { ...base, depth: box }, ...on, now: 100 });
+  assert.ok(r.events.some((e) => e.type === 'say' && e.text.startsWith('Нов предмет')));
+  assert.equal(r.mapChanged, true);
+  const off = make();
+  off.nav.goTo('goal', off.aligner.pose(base), 0);
+  const r2 = handleFrame({ f: { ...base, depth: box }, ...off, now: 100, useDepth: false });
+  assert.equal(r2.mapChanged, false);
+});

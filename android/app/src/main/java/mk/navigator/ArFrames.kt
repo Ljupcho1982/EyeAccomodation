@@ -4,9 +4,13 @@ import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import com.google.ar.core.AugmentedImage
+import com.google.ar.core.Camera
+import com.google.ar.core.Frame
 import com.google.ar.core.Plane
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
+import com.google.ar.core.exceptions.NotYetAvailableException
+import java.nio.ByteOrder
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -20,8 +24,14 @@ import javax.microedition.khronos.opengles.GL10
 class ArFrames(
     private val sessionProvider: () -> Session?,
     private val rotationProvider: () -> Int,
+    private val depthSupported: () -> Boolean,
     private val send: (String) -> Unit,
 ) : GLSurfaceView.Renderer {
+
+    private companion object {
+        const val MIN_DEPTH_MM = 300 // closer than this is noise
+        const val MAX_DEPTH_MM = 4000 // farther than this is too noisy to trust
+    }
 
     private var textureId = 0
     private var width = 1
@@ -100,8 +110,63 @@ class ArFrames(
                 pc.release()
             }
         }
-        sb.append("]}")
+        sb.append("]")
+        if (depthSupported()) {
+            sb.append(",\"depth\":[")
+            if (tracking == "TRACKING") appendDepthPoints(sb, frame, camera)
+            sb.append(']')
+        }
+        sb.append('}')
         send(sb.toString())
+    }
+
+    /**
+     * Dense depth from the Depth API as world-space points. Samples a coarse grid of the
+     * depth image (about 20 x 11 points) and unprojects each with the camera intrinsics.
+     * The image is in sensor orientation, like camera.pose, so no display rotation is applied.
+     */
+    private fun appendDepthPoints(sb: StringBuilder, frame: Frame, camera: Camera) {
+        val image = try {
+            frame.acquireDepthImage16Bits()
+        } catch (e: NotYetAvailableException) {
+            return
+        }
+        try {
+            val w = image.width
+            val h = image.height
+            val plane = image.planes[0]
+            val buf = plane.buffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+            val rowShorts = plane.rowStride / 2
+            val intr = camera.imageIntrinsics
+            val sx = w.toFloat() / intr.imageDimensions[0]
+            val sy = h.toFloat() / intr.imageDimensions[1]
+            val fx = intr.focalLength[0] * sx
+            val fy = intr.focalLength[1] * sy
+            val cx = intr.principalPoint[0] * sx
+            val cy = intr.principalPoint[1] * sy
+            val pose = camera.pose
+            val step = 8
+            var first = true
+            var v = step / 2
+            while (v < h) {
+                var u = step / 2
+                while (u < w) {
+                    val mm = buf.get(v * rowShorts + u).toInt() and 0x1FFF
+                    if (mm in MIN_DEPTH_MM..MAX_DEPTH_MM) {
+                        val z = mm / 1000f
+                        // image: u right, v down. camera pose: +X right, +Y up, -Z forward.
+                        val world = pose.transformPoint(floatArrayOf((u - cx) / fx * z, -(v - cy) / fy * z, -z))
+                        if (!first) sb.append(',')
+                        first = false
+                        sb.append(world[0]).append(',').append(world[1]).append(',').append(world[2])
+                    }
+                    u += step
+                }
+                v += step
+            }
+        } finally {
+            image.close()
+        }
     }
 
     /**

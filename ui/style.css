@@ -151,3 +151,5 @@ button, input, select { font:inherit; color:inherit; }
 }
 @media (prefers-reduced-motion: reduce) { .status i, .dial .needle { animation:none; transition:none; } }
 [data-mode="ar"] [data-sim] { display:none; }
+.check { display:flex; align-items:center; gap:10px; margin-top:14px; font-weight:600; min-height:44px; }
+.check input { width:22px; height:22px; accent-color:var(--primary); }

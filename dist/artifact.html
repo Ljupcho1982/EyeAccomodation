@@ -154,6 +154,8 @@ button, input, select { font:inherit; color:inherit; }
 }
 @media (prefers-reduced-motion: reduce) { .status i, .dial .needle { animation:none; transition:none; } }
 [data-mode="ar"] [data-sim] { display:none; }
+.check { display:flex; align-items:center; gap:10px; margin-top:14px; font-weight:600; min-height:44px; }
+.check input { width:22px; height:22px; accent-color:var(--primary); }
 
 </style>
 <div class="app">
@@ -196,6 +198,8 @@ button, input, select { font:inherit; color:inherit; }
 
       <h3 class="sub" data-i18n="goTo"></h3>
       <div class="row dests" id="dests"></div>
+
+      <label class="check" id="depthRow" hidden><input id="depthToggle" type="checkbox" checked><span data-i18n="depth"></span></label>
 
       <h3 class="sub" data-i18n="command"></h3>
       <div class="cmd">
@@ -1030,6 +1034,12 @@ class Navigator {
     return [{ type: 'say', text: this.t.where(this.destName(best.d), hour, this.t.num(meters), this.t.unit(meters)) }];
   }
 
+  // Cells that depth shows as bare floor again (a chair was moved away).
+  clearObstacles(rects) {
+    for (const r of rects) this.grid.clearRect(r.x0, r.y0, r.x1, r.y1);
+    this.analysis = null;
+  }
+
   // Save the current spot under a spoken name (used when mapping a real room).
   remember(name, pose) {
     if (!name) return [{ type: 'say', text: this.t.noName }];
@@ -1103,6 +1113,13 @@ function trackingToLocalization(state) {
 // A saved map remembers which kind it uses (`expected`) and refuses the other one.
 const MARKER_HEADING = 180;
 
+const DEPTH_MIN_HITS = 2; // depth is dense, so fewer votes are needed than for sparse points
+const DEPTH_FLOOR_TOL_CM = 5;
+const DEPTH_TOL_PER_M_CM = 2;
+const CLEAR_VOTES = 8;
+const CLEAR_QUIET_FRAMES = 20; // about 2 s at 10 frames per second
+const CLEARABLE_MAX_CM = 120;
+
 class Aligner {
   constructor(home, expected = null) {
     this.home = home;
@@ -1170,6 +1187,63 @@ class PointMap {
     this.rangeCm = opts.rangeCm ?? 400;
     this.hits = new Uint8Array(grid.cols * grid.rows);
     this.top = new Float32Array(grid.cols * grid.rows);
+    // Depth API state
+    this.dHits = new Uint8Array(grid.cols * grid.rows);
+    this.floorVotes = new Uint8Array(grid.cols * grid.rows);
+    this.lastObs = new Int32Array(grid.cols * grid.rows).fill(-1e9);
+    this.frame = 0;
+  }
+
+  // Depth noise grows with range, so the "this is floor" band widens with distance.
+  static depthFloorTolCm(rangeCm) {
+    return DEPTH_FLOOR_TOL_CM + DEPTH_TOL_PER_M_CM * Math.max(0, rangeCm / 100 - 1);
+  }
+
+  // Dense depth points (ARCore Depth API), flat [x, y, z, ...] in ARCore metres.
+  // Returns { add, clear }: rects that became obstacles, and cells seen as plain floor
+  // for a while (a chair that was moved away).
+  ingestDepth(points, floorY, pose) {
+    const g = this.grid;
+    const add = [];
+    const clear = [];
+    this.frame++;
+    for (let i = 0; i + 2 < points.length; i += 3) {
+      const hCm = (points[i + 1] - floorY) * 100;
+      if (hCm > this.maxHeightCm) continue;
+      const p = this.aligner.point(points[i], points[i + 2]);
+      const range = Math.hypot(p.x - pose.x, p.y - pose.y);
+      if (range > this.rangeCm) continue;
+      const { c, r } = g.cellOf(p.x, p.y);
+      if (!g.inBounds(c, r)) continue;
+      const k = g.idx(c, r);
+      if (hCm < PointMap.depthFloorTolCm(range)) {
+        if (this.floorVotes[k] < 255) this.floorVotes[k]++;
+        // Clear only furniture-height cells (never walls), after enough floor votes and
+        // a quiet period with no obstacle votes: floor seen under a table must not erase it.
+        if (
+          this.floorVotes[k] >= CLEAR_VOTES &&
+          this.frame - this.lastObs[k] > CLEAR_QUIET_FRAMES &&
+          g.h[k] > 0 &&
+          g.h[k] < CLEARABLE_MAX_CM
+        ) {
+          g.h[k] = 0;
+          this.hits[k] = 0;
+          this.dHits[k] = 0;
+          this.top[k] = 0;
+          this.floorVotes[k] = 0;
+          clear.push({ x0: c * CELL_CM, y0: r * CELL_CM, x1: (c + 1) * CELL_CM, y1: (r + 1) * CELL_CM });
+        }
+        continue;
+      }
+      this.lastObs[k] = this.frame;
+      this.floorVotes[k] = 0;
+      if (this.dHits[k] < 255) this.dHits[k]++;
+      if (hCm > this.top[k]) this.top[k] = hCm;
+      if (this.dHits[k] === DEPTH_MIN_HITS && g.h[k] < this.top[k]) {
+        add.push({ x0: c * CELL_CM, y0: r * CELL_CM, x1: (c + 1) * CELL_CM, y1: (r + 1) * CELL_CM, height: this.top[k] });
+      }
+    }
+    return { add, clear };
   }
 
   // points: flat [x, y, z, ...] in ARCore metres. Returns rects for newly occupied cells.
@@ -1196,7 +1270,7 @@ class PointMap {
 
 // One ARCore frame in, navigation events out.
 // `anchored` is set on the frame where the map frame was (re)pinned to a marker.
-function handleFrame({ f, nav, aligner, pointMap, now }) {
+function handleFrame({ f, nav, aligner, pointMap, now, useDepth = true }) {
   const loc = trackingToLocalization(f.tracking);
   let anchored = null;
   // A marker in view pins the map frame. Once guidance is running, only re-pin while
@@ -1207,15 +1281,28 @@ function handleFrame({ f, nav, aligner, pointMap, now }) {
       nav.needsRelocalize = false;
     }
   }
-  if (!aligner.ready) return { pose: null, events: [], anchored };
+  if (!aligner.ready) return { pose: null, events: [], anchored, mapChanged: false };
   const pose = aligner.pose(f);
   const events = [];
-  if (loc === TRACKING_OK && f.points?.length && f.floorY != null) {
-    const rects = pointMap.ingest(f.points, f.floorY, pose);
-    if (rects.length) events.push(...nav.addObstacles(rects, pose, now));
+  let mapChanged = false;
+  if (loc === TRACKING_OK && f.floorY != null) {
+    const rects = [];
+    if (f.points?.length) rects.push(...pointMap.ingest(f.points, f.floorY, pose));
+    if (useDepth && f.depth?.length) {
+      const d = pointMap.ingestDepth(f.depth, f.floorY, pose);
+      rects.push(...d.add);
+      if (d.clear.length) {
+        nav.clearObstacles(d.clear);
+        mapChanged = true;
+      }
+    }
+    if (rects.length) {
+      events.push(...nav.addObstacles(rects, pose, now));
+      mapChanged = true;
+    }
   }
   events.push(...nav.update(pose, { localization: loc, now }));
-  return { pose, events, anchored };
+  return { pose, events, anchored, mapChanged };
 }
 
 // Browser UI: profile, clock dial, simulator map, voice/haptic output.
@@ -1272,6 +1359,7 @@ const I18N = {
     saved: 'Зачувано, шифрирано.', loaded: 'Вчитано.', none: 'Нема зачувано.', wrong: 'Погрешна лозинка.', needPass: 'Внеси лозинка.', noStore: 'Прелистувачот не дозволува зачувување.',
     micNo: 'Микрофонот не е достапен тука. Користи го полето.',
     anchorHint: 'Насочи ја камерата кон маркерот на ѕидот или кажи „потврди локација“ на почетната точка.',
+    depth: 'Длабочина (Depth API)', depthOn: 'Длабочината е вклучена.', depthOff: 'Длабочината е исклучена: само ретки точки.',
     markerFound: 'Маркерот е пронајден.', needTracking: 'Почекај, телефонот уште ја наоѓа околината.',
     markerOnly: 'Оваа мапа користи маркер. Насочи ја камерата кон него.',
     locOk: 'Локацијата е потврдена.', resetDone: 'Демото е вратено на почеток.',
@@ -1316,6 +1404,7 @@ const I18N = {
     saved: 'Saved, encrypted.', loaded: 'Loaded.', none: 'Nothing saved.', wrong: 'Wrong passphrase.', needPass: 'Enter a passphrase.', noStore: 'This browser blocks saving.',
     micNo: 'Microphone not available here. Use the text box.',
     anchorHint: 'Point the camera at the marker on the wall, or say "confirm location" at the start point.',
+    depth: 'Depth (Depth API)', depthOn: 'Depth is on.', depthOff: 'Depth is off: sparse points only.',
     markerFound: 'Marker found.', needTracking: 'Wait, the phone is still finding its surroundings.',
     markerOnly: 'This map uses a marker. Point the camera at it.',
     locOk: 'Location confirmed.', resetDone: 'Demo restored.',
@@ -1341,6 +1430,8 @@ let lastFrame = null;
 let hintAt = -Infinity;
 let pointMap = new PointMap(grid, aligner);
 let arTracking = 'STOPPED';
+let depthOn = true;
+let depthSeen = false;
 let settings;
 let nav;
 let analysis;
@@ -1815,6 +1906,10 @@ $('relocBtn').addEventListener('click', () => {
   render();
 });
 $('resetBtn').addEventListener('click', reset);
+$('depthToggle').addEventListener('change', () => {
+  depthOn = $('depthToggle').checked;
+  log(depthOn ? L.depthOn : L.depthOff);
+});
 $('map').addEventListener('click', (e) => {
   const rect = $('map').getBoundingClientRect();
   const v = view($('map'));
@@ -1899,8 +1994,13 @@ window.__arFrame = (f) => {
   lastFrame = f;
   const wasReady = aligner.ready;
   const wasLost = nav.state === 'stopped' && nav.reason === 'localization_lost';
-  const r = handleFrame({ f, nav, aligner, pointMap, now: performance.now() });
+  if (f.depth !== undefined && !depthSeen) {
+    depthSeen = true;
+    $('depthRow').hidden = false;
+  }
+  const r = handleFrame({ f, nav, aligner, pointMap, now: performance.now(), useDepth: depthOn });
   if (r.pose) pose = r.pose;
+  if (r.mapChanged) analysis = analyze(grid, settings);
   if (r.anchored && (!wasReady || wasLost)) speak(L.markerFound);
   if (!aligner.ready && performance.now() - hintAt > 10000) {
     hintAt = performance.now();

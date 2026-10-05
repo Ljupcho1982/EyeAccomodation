@@ -192,6 +192,12 @@ export class Navigator {
     return [{ type: 'say', text: this.t.where(this.destName(best.d), hour, this.t.num(meters), this.t.unit(meters)) }];
   }
 
+  // Cells that depth shows as bare floor again (a chair was moved away).
+  clearObstacles(rects) {
+    for (const r of rects) this.grid.clearRect(r.x0, r.y0, r.x1, r.y1);
+    this.analysis = null;
+  }
+
   // Save the current spot under a spoken name (used when mapping a real room).
   remember(name, pose) {
     if (!name) return [{ type: 'say', text: this.t.noName }];
