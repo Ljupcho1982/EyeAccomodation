@@ -61,6 +61,19 @@ export class Grid {
     return { cols: this.cols, rows: this.rows, h: Array.from(this.h) };
   }
 
+  // Sparse form for large maps: only cells that are not bare floor.
+  toSparse() {
+    const cells = [];
+    for (let i = 0; i < this.h.length; i++) if (this.h[i] > 0) cells.push([i, this.h[i]]);
+    return { cols: this.cols, rows: this.rows, cells };
+  }
+
+  static fromSparse(o) {
+    const g = new Grid(o.cols * CELL_CM, o.rows * CELL_CM);
+    for (const [i, h] of o.cells) g.h[i] = h;
+    return g;
+  }
+
   static fromJSON(o) {
     const g = new Grid(o.cols * CELL_CM, o.rows * CELL_CM);
     g.h.set(o.h);

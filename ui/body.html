@@ -46,8 +46,8 @@
         <button id="cmdBtn" class="btn" type="button">OK</button>
       </div>
 
-      <h3 class="sub" data-i18n="simulate"></h3>
-      <div class="row">
+      <h3 class="sub" data-sim data-i18n="simulate"></h3>
+      <div class="row" data-sim>
         <button id="stopBtn" class="btn danger" type="button" data-i18n="stop"></button>
         <button id="resumeBtn" class="btn ghost" type="button" data-i18n="resume"></button>
         <button id="lostBtn" class="btn ghost" type="button" data-i18n="lose"></button>
@@ -105,7 +105,7 @@
       <ol class="log" id="log" aria-live="polite"></ol>
     </section>
 
-    <section class="card" id="vault" aria-labelledby="h-vault">
+    <section class="card" id="vault" data-sim aria-labelledby="h-vault">
       <h2 id="h-vault" data-i18n="vault"></h2>
       <div class="fld" style="margin-top:0"><label for="pass" data-i18n="pass"></label><input id="pass" class="field" type="password" autocomplete="off"><small data-i18n="vaultHelp"></small></div>
       <div class="row" style="margin-top:12px">

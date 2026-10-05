@@ -158,6 +158,7 @@ button, input, select { font:inherit; color:inherit; }
   .brand h1 { font-size:1.35em; } .derived { grid-template-columns:1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .status i, .dial .needle { animation:none; transition:none; } }
+[data-mode="ar"] [data-sim] { display:none; }
 
 </style>
 <style>body{margin:0}[hidden]{display:none!important}</style>
@@ -211,8 +212,8 @@ button, input, select { font:inherit; color:inherit; }
         <button id="cmdBtn" class="btn" type="button">OK</button>
       </div>
 
-      <h3 class="sub" data-i18n="simulate"></h3>
-      <div class="row">
+      <h3 class="sub" data-sim data-i18n="simulate"></h3>
+      <div class="row" data-sim>
         <button id="stopBtn" class="btn danger" type="button" data-i18n="stop"></button>
         <button id="resumeBtn" class="btn ghost" type="button" data-i18n="resume"></button>
         <button id="lostBtn" class="btn ghost" type="button" data-i18n="lose"></button>
@@ -270,7 +271,7 @@ button, input, select { font:inherit; color:inherit; }
       <ol class="log" id="log" aria-live="polite"></ol>
     </section>
 
-    <section class="card" id="vault" aria-labelledby="h-vault">
+    <section class="card" id="vault" data-sim aria-labelledby="h-vault">
       <h2 id="h-vault" data-i18n="vault"></h2>
       <div class="fld" style="margin-top:0"><label for="pass" data-i18n="pass"></label><input id="pass" class="field" type="password" autocomplete="off"><small data-i18n="vaultHelp"></small></div>
       <div class="row" style="margin-top:12px">
@@ -348,6 +349,19 @@ class Grid {
 
   toJSON() {
     return { cols: this.cols, rows: this.rows, h: Array.from(this.h) };
+  }
+
+  // Sparse form for large maps: only cells that are not bare floor.
+  toSparse() {
+    const cells = [];
+    for (let i = 0; i < this.h.length; i++) if (this.h[i] > 0) cells.push([i, this.h[i]]);
+    return { cols: this.cols, rows: this.rows, cells };
+  }
+
+  static fromSparse(o) {
+    const g = new Grid(o.cols * CELL_CM, o.rows * CELL_CM);
+    for (const [i, h] of o.cells) g.h[i] = h;
+    return g;
   }
 
   static fromJSON(o) {
@@ -677,6 +691,8 @@ const T = {
     where: (name, h, m, u) => `Најблиску е ${name}, ${m} ${u} кон ${h} часот.`,
     unknown: 'Не разбрав.',
     needRelocalize: 'Прво потврди ја локацијата.',
+    remembered: (n) => `Запомнето: ${n}.`,
+    noName: 'Кажи име, на пример „запомни тука кујна“.',
   },
   en: {
     num: (m) => String(m),
@@ -695,6 +711,8 @@ const T = {
     where: (name, h, m, u) => `Nearest is ${name}, ${m} ${u} at ${h} o'clock.`,
     unknown: "I didn't understand.",
     needRelocalize: 'Confirm your location first.',
+    remembered: (n) => `Saved: ${n}.`,
+    noName: 'Say a name, for example "remember here kitchen".',
   },
 };
 
@@ -741,6 +759,7 @@ const STOP = ['стоп', 'застани', 'пауза', 'stop', 'halt', 'pause
 const REPEAT = ['повтори', 'уште еднаш', 'repeat', 'say again'];
 const WHERE = ['каде сум', 'каде се наоѓам', 'where am i'];
 const RESUME = ['продолжи', 'продолжуваме', 'continue', 'resume'];
+const REMEMBER = ['запомни тука', 'запамти тука', 'запомни ова место', 'remember here', 'save here'];
 const GO = ['оди до', 'оди кон', 'одиме до', 'води ме до', 'одам до', 'go to', 'take me to', 'navigate to'];
 
 const has = (t, list) => list.some((w) => t === w || t.startsWith(w + ' ') || t.includes(' ' + w + ' ') || t.endsWith(' ' + w));
@@ -749,6 +768,9 @@ const has = (t, list) => list.some((w) => t === w || t.startsWith(w + ' ') || t.
 function parseCommand(text, destinations = []) {
   const t = norm(text || '');
   if (!t) return { type: 'unknown' };
+  for (const r of REMEMBER) {
+    if (t.startsWith(r + ' ')) return { type: 'remember', name: t.slice(r.length).trim() };
+  }
   if (has(t, STOP)) return { type: 'stop' };
   if (has(t, WHERE)) return { type: 'where' };
   if (has(t, REPEAT)) return { type: 'repeat' };
@@ -946,7 +968,12 @@ class Navigator {
 
   // A new object was detected. Replan only if it actually blocks the route.
   addObstacle(rect, pose, now = Date.now()) {
-    this.grid.setRect(rect.x0, rect.y0, rect.x1, rect.y1, rect.height);
+    return this.addObstacles([rect], pose, now);
+  }
+
+  addObstacles(rects, pose, now = Date.now()) {
+    for (const rect of rects) this.grid.setRect(rect.x0, rect.y0, rect.x1, rect.y1, rect.height);
+    if (!rects.length) return [];
     if (this.state !== 'navigating') return [];
     this.analysis = analyze(this.grid, this.settings);
     if (routeIsClear(this.grid, this.analysis, pose, this.waypoints)) return [];
@@ -1009,12 +1036,20 @@ class Navigator {
     return [{ type: 'say', text: this.t.where(this.destName(best.d), hour, this.t.num(meters), this.t.unit(meters)) }];
   }
 
+  // Save the current spot under a spoken name (used when mapping a real room).
+  remember(name, pose) {
+    if (!name) return [{ type: 'say', text: this.t.noName }];
+    this.destinations.push({ id: `u${this.destinations.length + 1}`, pos: { x: pose.x, y: pose.y }, names: { mk: [name], en: [name] } });
+    return [{ type: 'say', text: this.t.remembered(name) }, { type: 'dests' }];
+  }
+
   // Dispatch a parsed voice command.
   handle(cmd, pose, now = Date.now()) {
     switch (cmd.type) {
       case 'stop': return this.stop();
       case 'repeat': return this.repeat(pose, now);
       case 'where': return this.where(pose);
+      case 'remember': return this.remember(cmd.name, pose);
       case 'resume': return this.resume(pose, now);
       case 'go': return cmd.dest ? this.goTo(cmd.dest, pose, now) : [{ type: 'say', text: this.t.unknown }];
       default: return [{ type: 'say', text: this.t.unknown }];
@@ -1052,7 +1087,112 @@ const DESTINATIONS = [
 
 const START_POSE = { x: 50, y: 110, heading: 90 };
 
+// ARCore -> room map. ARCore reports points and the camera pose in its own world
+// frame (metres, y up, arbitrary origin and heading). This module aligns that
+// frame to the saved map and turns feature points into obstacle cells.
+
+
+const TRACKING_OK = 1;
+const TRACKING_PAUSED = 0.3; // below session.js LOC_MIN, so navigation halts
+
+function trackingToLocalization(state) {
+  if (state === 'TRACKING') return TRACKING_OK;
+  if (state === 'PAUSED') return TRACKING_PAUSED;
+  return 0;
+}
+
+// Maps ARCore world coordinates onto the saved map. The first tracked frame is
+// pinned to `home` ({x, y, heading} in map cm/deg): the user starts each session
+// standing at the saved home spot, facing the saved direction.
+class Aligner {
+  constructor(home) {
+    this.home = home;
+    this.ready = false;
+  }
+
+  // f: { x, z, fx, fz } camera position and horizontal forward vector in ARCore world.
+  start(f) {
+    this.x0 = f.x;
+    this.z0 = f.z;
+    this.delta = this.home.heading - Aligner.headingOf(f);
+    this.ready = true;
+  }
+
+  static headingOf(f) {
+    return (Math.atan2(f.fx, -f.fz) * 180) / Math.PI;
+  }
+
+  point(x, z) {
+    const a = (this.delta * Math.PI) / 180;
+    const dx = (x - this.x0) * 100;
+    const dy = (z - this.z0) * 100;
+    return {
+      x: this.home.x + dx * Math.cos(a) - dy * Math.sin(a),
+      y: this.home.y + dx * Math.sin(a) + dy * Math.cos(a),
+    };
+  }
+
+  pose(f) {
+    const p = this.point(f.x, f.z);
+    return { x: p.x, y: p.y, heading: ((normalizeAngle(Aligner.headingOf(f) + this.delta) % 360) + 360) % 360 };
+  }
+}
+
+// Votes feature points into grid cells. A cell becomes an obstacle after `minHits`
+// points above the floor, which filters single noisy points.
+class PointMap {
+  constructor(grid, aligner, opts = {}) {
+    this.grid = grid;
+    this.aligner = aligner;
+    this.minHits = opts.minHits ?? 3;
+    this.floorTolCm = opts.floorTolCm ?? 8; // cannot see thresholds below this with feature points
+    this.maxHeightCm = opts.maxHeightCm ?? 190; // ignore the ceiling
+    this.rangeCm = opts.rangeCm ?? 400;
+    this.hits = new Uint8Array(grid.cols * grid.rows);
+    this.top = new Float32Array(grid.cols * grid.rows);
+  }
+
+  // points: flat [x, y, z, ...] in ARCore metres. Returns rects for newly occupied cells.
+  ingest(points, floorY, pose) {
+    const rects = [];
+    const g = this.grid;
+    for (let i = 0; i + 2 < points.length; i += 3) {
+      const hCm = (points[i + 1] - floorY) * 100;
+      if (hCm < this.floorTolCm || hCm > this.maxHeightCm) continue;
+      const p = this.aligner.point(points[i], points[i + 2]);
+      if (Math.hypot(p.x - pose.x, p.y - pose.y) > this.rangeCm) continue;
+      const { c, r } = g.cellOf(p.x, p.y);
+      if (!g.inBounds(c, r)) continue;
+      const k = g.idx(c, r);
+      if (this.hits[k] < 255) this.hits[k]++;
+      if (hCm > this.top[k]) this.top[k] = hCm;
+      if (this.hits[k] === this.minHits && g.h[k] < this.top[k]) {
+        rects.push({ x0: c * CELL_CM, y0: r * CELL_CM, x1: (c + 1) * CELL_CM, y1: (r + 1) * CELL_CM, height: this.top[k] });
+      }
+    }
+    return rects;
+  }
+}
+
+// One ARCore frame in, navigation events out.
+function handleFrame({ f, nav, aligner, pointMap, now }) {
+  const loc = trackingToLocalization(f.tracking);
+  if (!aligner.ready) {
+    if (f.tracking !== 'TRACKING') return { pose: null, events: [] };
+    aligner.start(f);
+  }
+  const pose = aligner.pose(f);
+  const events = [];
+  if (loc === TRACKING_OK && f.points?.length && f.floorY != null) {
+    const rects = pointMap.ingest(f.points, f.floorY, pose);
+    if (rects.length) events.push(...nav.addObstacles(rects, pose, now));
+  }
+  events.push(...nav.update(pose, { localization: loc, now }));
+  return { pose, events };
+}
+
 // Browser UI: profile, clock dial, simulator map, voice/haptic output.
+
 
 
 
@@ -1152,9 +1292,20 @@ const I18N = {
   },
 };
 
+// Inside the Android app a native bridge named `Android` exists: ARCore feeds the pose
+// and the map, and speech/vibration go through the phone. In a browser it is the simulator.
+const AR = typeof window.Android !== 'undefined';
+const AR_GRID_CM = 1200; // 12 x 12 m of map around the home point
+const AR_HOME = { x: AR_GRID_CM / 2, y: AR_GRID_CM / 2, heading: 0 };
+
 let L = I18N.mk;
-let grid = buildDemoRoom();
-let pose = { ...START_POSE };
+let grid = AR ? new Grid(AR_GRID_CM, AR_GRID_CM) : buildDemoRoom();
+let destinations = AR ? [] : DESTINATIONS;
+let home = { ...AR_HOME };
+let pose = AR ? { ...AR_HOME } : { ...START_POSE };
+let aligner = new Aligner(home);
+let pointMap = new PointMap(grid, aligner);
+let arTracking = 'STOPPED';
 let settings;
 let nav;
 let analysis;
@@ -1170,6 +1321,7 @@ const PRESET_DEFAULTS = {
   combined: { acuity: 0.15, light: 'normal', field: 'none' },
 };
 
+const destLabel = (d) => L.dests[d.id] ?? d.names[$('lang').value]?.[0] ?? d.names.mk[0];
 const preset = () => document.querySelector('input[name="preset"]:checked').value;
 const hasChair = () => ['wheelchair', 'combined'].includes(preset());
 
@@ -1240,6 +1392,7 @@ function speak(text) {
   $('instruction').textContent = text;
   log(text);
   try {
+    if (AR) return window.Android.say(text, L.lang);
     if (!('speechSynthesis' in window)) return;
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
@@ -1264,6 +1417,7 @@ function buzz(side, pattern) {
     $('hapText').textContent = '';
   }, 900);
   try {
+    if (AR) return window.Android.vibrate(JSON.stringify(pattern));
     navigator.vibrate?.(pattern);
   } catch {
     /* ignore */
@@ -1274,6 +1428,10 @@ function dispatch(events) {
   for (const e of events) {
     if (e.type === 'say') speak(e.text);
     else if (e.type === 'haptic') buzz(e.side, e.pattern);
+    else if (e.type === 'dests') {
+      buildDestButtons();
+      persist();
+    }
   }
   updateStatus();
   render();
@@ -1293,11 +1451,11 @@ function updateStatus() {
 function buildDestButtons() {
   const box = $('dests');
   box.replaceChildren();
-  for (const d of DESTINATIONS) {
+  for (const d of destinations) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'btn ghost';
-    b.textContent = L.dests[d.id];
+    b.textContent = destLabel(d);
     b.addEventListener('click', () => dispatch(nav.goTo(d.id, pose)));
     box.append(b);
   }
@@ -1330,7 +1488,7 @@ function applyProfile() {
   $('dOut').style.fontSize = '.8em';
 
   const prev = nav;
-  nav = new Navigator({ grid, destinations: DESTINATIONS, settings });
+  nav = new Navigator({ grid, destinations, settings });
   if (prev?.dest && prev.state === 'navigating') {
     dispatch(nav.goTo(prev.dest.id, pose));
   }
@@ -1347,6 +1505,7 @@ function refreshText() {
 
 // --- simulated user: follows the guidance at walking pace --------------------
 function simTick() {
+  if (AR) return;
   if (nav.state !== 'navigating' || !nav.waypoints.length) return;
   const wp = nav.waypoints[0];
   const rel = relativeBearing(pose, wp);
@@ -1420,36 +1579,50 @@ function updateReadout() {
 // --- map ---------------------------------------------------------------------
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
+// Demo: the whole room fits the canvas. AR: an 10 m window that follows the user.
+function view(cv) {
+  if (!AR) return { sc: SCALE, ox: 0, oy: 0 };
+  const sc = cv.width / 1000;
+  return { sc, ox: cv.width / 2 - pose.x * sc, oy: cv.height / 2 - pose.y * sc };
+}
+
 function render() {
   updateReadout();
   const cv = $('map');
   if (!settings.screen) return;
   const ctx = cv.getContext('2d');
+  const { sc, ox, oy } = view(cv);
+  const X = (x) => x * sc + ox;
+  const Y = (y) => y * sc + oy;
   ctx.clearRect(0, 0, cv.width, cv.height);
   ctx.fillStyle = cssVar('--m-floor');
   ctx.fillRect(0, 0, cv.width, cv.height);
-  const s = CELL_CM * SCALE;
+  const s = CELL_CM * sc;
   const wall = cssVar('--m-wall');
   const obst = cssVar('--m-obst');
   const low = cssVar('--m-low');
   const tight = cssVar('--m-tight');
   for (let r = 0; r < grid.rows; r++) {
+    const py = r * s + oy;
+    if (py > cv.height || py + s < 0) continue;
     for (let c = 0; c < grid.cols; c++) {
+      const px = c * s + ox;
+      if (px > cv.width || px + s < 0) continue;
       const i = grid.idx(c, r);
       const h = grid.h[i];
       if (h > 0) ctx.fillStyle = h >= WALL ? wall : h > settings.maxStepCm ? obst : low;
       else if (!analysis.passable[i]) ctx.fillStyle = tight;
       else continue;
-      ctx.fillRect(c * s, r * s, s + 0.5, s + 0.5);
+      ctx.fillRect(px, py, s + 0.5, s + 0.5);
     }
   }
   const ink = cssVar('--ink');
   const primary = cssVar('--m-path');
   ctx.font = `600 ${26 * Math.max(1, settings.fontScale * 0.85)}px ${cssVar('--f-body')}`;
   ctx.textBaseline = 'middle';
-  for (const d of DESTINATIONS) {
-    const x = d.pos.x * SCALE;
-    const y = d.pos.y * SCALE;
+  for (const d of destinations) {
+    const x = X(d.pos.x);
+    const y = Y(d.pos.y);
     ctx.fillStyle = cssVar('--surface');
     ctx.strokeStyle = ink;
     ctx.lineWidth = 4;
@@ -1457,7 +1630,7 @@ function render() {
     ctx.arc(x, y, 12, 0, 7);
     ctx.fill();
     ctx.stroke();
-    const label = L.dests[d.id];
+    const label = destLabel(d);
     const w = ctx.measureText(label).width;
     const lx = x + 20 + w > cv.width - 10 ? x - 20 - w : x + 20;
     ctx.lineWidth = 6;
@@ -1473,21 +1646,21 @@ function render() {
     ctx.lineJoin = 'round';
     ctx.setLineDash([22, 14]);
     ctx.beginPath();
-    ctx.moveTo(pose.x * SCALE, pose.y * SCALE);
-    for (const w of nav.waypoints) ctx.lineTo(w.x * SCALE, w.y * SCALE);
+    ctx.moveTo(X(pose.x), Y(pose.y));
+    for (const w of nav.waypoints) ctx.lineTo(X(w.x), Y(w.y));
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = primary;
     for (const w of nav.waypoints) {
       ctx.beginPath();
-      ctx.arc(w.x * SCALE, w.y * SCALE, 9, 0, 7);
+      ctx.arc(X(w.x), Y(w.y), 9, 0, 7);
       ctx.fill();
     }
   }
   ctx.save();
-  ctx.translate(pose.x * SCALE, pose.y * SCALE);
+  ctx.translate(X(pose.x), Y(pose.y));
   ctx.rotate((pose.heading * Math.PI) / 180);
-  const lost = localization < 0.6;
+  const lost = AR ? arTracking !== 'TRACKING' : localization < 0.6;
   ctx.fillStyle = lost ? cssVar('--danger') : ink;
   ctx.strokeStyle = cssVar('--m-floor');
   ctx.lineWidth = 5;
@@ -1505,10 +1678,15 @@ function render() {
 // --- input -------------------------------------------------------------------
 function runCommand(text) {
   if (!text.trim()) return;
-  dispatch(nav.handle(parseCommand(text, DESTINATIONS), pose, performance.now()));
+  dispatch(nav.handle(parseCommand(text, destinations), pose, performance.now()));
 }
 
 function setupMic() {
+  if (AR) {
+    // Android WebView has no SpeechRecognition; the native recognizer answers via __arCommand.
+    $('micBtn').addEventListener('click', () => window.Android.listen(L.lang));
+    return;
+  }
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
     $('micBtn').disabled = true;
@@ -1538,6 +1716,7 @@ function vaultMsg(text) {
 }
 
 function reset() {
+  if (AR) return;
   grid = buildDemoRoom();
   pose = { ...START_POSE };
   localization = 1;
@@ -1578,8 +1757,9 @@ $('relocBtn').addEventListener('click', () => {
 $('resetBtn').addEventListener('click', reset);
 $('map').addEventListener('click', (e) => {
   const rect = $('map').getBoundingClientRect();
-  const x = ((e.clientX - rect.left) / rect.width) * 600;
-  const y = ((e.clientY - rect.top) / rect.height) * 500;
+  const v = view($('map'));
+  const x = (((e.clientX - rect.left) / rect.width) * $('map').width - v.ox) / v.sc;
+  const y = (((e.clientY - rect.top) / rect.height) * $('map').height - v.oy) / v.sc;
   const ev = nav.addObstacle({ x0: x - 20, y0: y - 20, x1: x + 20, y1: y + 20, height: 40 }, pose, performance.now());
   analysis = analyze(grid, settings);
   dispatch(ev);
@@ -1617,6 +1797,88 @@ applyProfile();
 setupMic();
 setInterval(simTick, TICK_MS);
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', render);
+
+// --- ARCore bridge (Android app only) -----------------------------------------
+let saveTimer;
+function persist() {
+  if (!AR) return;
+  if (saveTimer) return; // throttle: at most one save per 5 s while frames keep arriving
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      window.Android.secureSave(JSON.stringify({ v: 1, grid: grid.toSparse(), home, destinations, profile: profileInput }));
+    } catch {
+      /* the native side reports storage problems */
+    }
+  }, 5000);
+}
+
+function restore() {
+  try {
+    const raw = window.Android.secureLoad();
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    grid = Grid.fromSparse(d.grid);
+    destinations = d.destinations;
+    home = d.home;
+    aligner = new Aligner(home);
+    pointMap = new PointMap(grid, aligner);
+    if (d.profile) {
+      writeForm(d.profile);
+      applyLang();
+    }
+  } catch {
+    /* corrupt or missing: start with an empty map */
+  }
+}
+
+// Called by the native side about 10 times a second with one ARCore frame:
+// { tracking, x, z, fx, fz, floorY, points: [x, y, z, ...] } in ARCore world metres.
+window.__arFrame = (f) => {
+  arTracking = f.tracking;
+  const r = handleFrame({ f, nav, aligner, pointMap, now: performance.now() });
+  if (r.pose) pose = r.pose;
+  dispatch(r.events);
+  persist();
+};
+
+// Status notes from native code (missing voice, camera, ARCore). Spoken and logged.
+const NOTES = {
+  mk: {
+    tts_fallback: 'Македонскиот глас не е инсталиран. Користам близок глас.',
+    tts_missing: 'Нема инсталиран глас за говор. Инсталирај глас во поставките на телефонот.',
+    stt_maybe_online: 'Офлајн препознавање на говор не е инсталирано. Звукот може да оди преку интернет.',
+    stt_missing: 'Препознавањето на говор не е достапно на овој телефон.',
+    camera_denied: 'Треба дозвола за камера за да знам каде си.',
+    camera_busy: 'Камерата е зафатена од друга апликација.',
+    arcore_unavailable: 'ARCore не е достапен на овој телефон.',
+  },
+  en: {
+    tts_fallback: 'The Macedonian voice is not installed. Using a close voice.',
+    tts_missing: 'No speech voice is installed. Install one in the phone settings.',
+    stt_maybe_online: 'Offline speech recognition is not installed. Audio may go over the internet.',
+    stt_missing: 'Speech recognition is not available on this phone.',
+    camera_denied: 'Camera permission is needed to know where you are.',
+    camera_busy: 'The camera is in use by another app.',
+    arcore_unavailable: 'ARCore is not available on this phone.',
+  },
+};
+window.__arNote = (key) => {
+  const t = (NOTES[$('lang').value] ?? NOTES.mk)[key];
+  if (t) speak(t);
+  else log(key);
+};
+
+// Voice recognition result from the native recognizer.
+window.__arCommand = (text) => runCommand(text);
+
+if (AR) {
+  document.body.dataset.mode = 'ar';
+  restore();
+  applyProfile();
+  buildDestButtons();
+  window.Android.ready?.();
+}
 
 })();
 </script>

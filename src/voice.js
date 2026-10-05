@@ -12,6 +12,7 @@ const STOP = ['стоп', 'застани', 'пауза', 'stop', 'halt', 'pause
 const REPEAT = ['повтори', 'уште еднаш', 'repeat', 'say again'];
 const WHERE = ['каде сум', 'каде се наоѓам', 'where am i'];
 const RESUME = ['продолжи', 'продолжуваме', 'continue', 'resume'];
+const REMEMBER = ['запомни тука', 'запамти тука', 'запомни ова место', 'remember here', 'save here'];
 const GO = ['оди до', 'оди кон', 'одиме до', 'води ме до', 'одам до', 'go to', 'take me to', 'navigate to'];
 
 const has = (t, list) => list.some((w) => t === w || t.startsWith(w + ' ') || t.includes(' ' + w + ' ') || t.endsWith(' ' + w));
@@ -20,6 +21,9 @@ const has = (t, list) => list.some((w) => t === w || t.startsWith(w + ' ') || t.
 export function parseCommand(text, destinations = []) {
   const t = norm(text || '');
   if (!t) return { type: 'unknown' };
+  for (const r of REMEMBER) {
+    if (t.startsWith(r + ' ')) return { type: 'remember', name: t.slice(r.length).trim() };
+  }
   if (has(t, STOP)) return { type: 'stop' };
   if (has(t, WHERE)) return { type: 'where' };
   if (has(t, REPEAT)) return { type: 'repeat' };

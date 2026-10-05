@@ -3,7 +3,7 @@
 //   dist/artifact.html  same page as a fragment, for publishing as a claude.ai Artifact
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
-const order = ['grid', 'profile', 'planner', 'guidance', 'voice', 'store', 'session', 'demo-room', 'app'];
+const order = ['grid', 'profile', 'planner', 'guidance', 'voice', 'store', 'session', 'demo-room', 'mapping', 'app'];
 const js = order
   .map((n) => readFileSync(`src/${n}.js`, 'utf8').replace(/^import .*;\s*$/gm, '').replace(/^export\s+/gm, ''))
   .join('\n');

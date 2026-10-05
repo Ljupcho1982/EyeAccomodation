@@ -150,3 +150,4 @@ button, input, select { font:inherit; color:inherit; }
   .brand h1 { font-size:1.35em; } .derived { grid-template-columns:1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .status i, .dial .needle { animation:none; transition:none; } }
+[data-mode="ar"] [data-sim] { display:none; }

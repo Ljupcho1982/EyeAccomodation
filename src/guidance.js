@@ -48,6 +48,8 @@ const T = {
     where: (name, h, m, u) => `Најблиску е ${name}, ${m} ${u} кон ${h} часот.`,
     unknown: 'Не разбрав.',
     needRelocalize: 'Прво потврди ја локацијата.',
+    remembered: (n) => `Запомнето: ${n}.`,
+    noName: 'Кажи име, на пример „запомни тука кујна“.',
   },
   en: {
     num: (m) => String(m),
@@ -66,6 +68,8 @@ const T = {
     where: (name, h, m, u) => `Nearest is ${name}, ${m} ${u} at ${h} o'clock.`,
     unknown: "I didn't understand.",
     needRelocalize: 'Confirm your location first.',
+    remembered: (n) => `Saved: ${n}.`,
+    noName: 'Say a name, for example "remember here kitchen".',
   },
 };
 

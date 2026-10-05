@@ -7,6 +7,7 @@ import { Navigator } from './session.js';
 import { parseCommand } from './voice.js';
 import { save, load } from './store.js';
 import { relativeBearing, clockHour, roundMeters } from './guidance.js';
+import { Aligner, PointMap, handleFrame } from './mapping.js';
 
 const $ = (id) => document.getElementById(id);
 const SCALE = 2.4; // canvas px per cm (canvas is 1440 x 1200 for a 600 x 500 cm room)
@@ -99,9 +100,20 @@ const I18N = {
   },
 };
 
+// Inside the Android app a native bridge named `Android` exists: ARCore feeds the pose
+// and the map, and speech/vibration go through the phone. In a browser it is the simulator.
+const AR = typeof window.Android !== 'undefined';
+const AR_GRID_CM = 1200; // 12 x 12 m of map around the home point
+const AR_HOME = { x: AR_GRID_CM / 2, y: AR_GRID_CM / 2, heading: 0 };
+
 let L = I18N.mk;
-let grid = buildDemoRoom();
-let pose = { ...START_POSE };
+let grid = AR ? new Grid(AR_GRID_CM, AR_GRID_CM) : buildDemoRoom();
+let destinations = AR ? [] : DESTINATIONS;
+let home = { ...AR_HOME };
+let pose = AR ? { ...AR_HOME } : { ...START_POSE };
+let aligner = new Aligner(home);
+let pointMap = new PointMap(grid, aligner);
+let arTracking = 'STOPPED';
 let settings;
 let nav;
 let analysis;
@@ -117,6 +129,7 @@ const PRESET_DEFAULTS = {
   combined: { acuity: 0.15, light: 'normal', field: 'none' },
 };
 
+const destLabel = (d) => L.dests[d.id] ?? d.names[$('lang').value]?.[0] ?? d.names.mk[0];
 const preset = () => document.querySelector('input[name="preset"]:checked').value;
 const hasChair = () => ['wheelchair', 'combined'].includes(preset());
 
@@ -187,6 +200,7 @@ function speak(text) {
   $('instruction').textContent = text;
   log(text);
   try {
+    if (AR) return window.Android.say(text, L.lang);
     if (!('speechSynthesis' in window)) return;
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
@@ -211,6 +225,7 @@ function buzz(side, pattern) {
     $('hapText').textContent = '';
   }, 900);
   try {
+    if (AR) return window.Android.vibrate(JSON.stringify(pattern));
     navigator.vibrate?.(pattern);
   } catch {
     /* ignore */
@@ -221,6 +236,10 @@ function dispatch(events) {
   for (const e of events) {
     if (e.type === 'say') speak(e.text);
     else if (e.type === 'haptic') buzz(e.side, e.pattern);
+    else if (e.type === 'dests') {
+      buildDestButtons();
+      persist();
+    }
   }
   updateStatus();
   render();
@@ -240,11 +259,11 @@ function updateStatus() {
 function buildDestButtons() {
   const box = $('dests');
   box.replaceChildren();
-  for (const d of DESTINATIONS) {
+  for (const d of destinations) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'btn ghost';
-    b.textContent = L.dests[d.id];
+    b.textContent = destLabel(d);
     b.addEventListener('click', () => dispatch(nav.goTo(d.id, pose)));
     box.append(b);
   }
@@ -277,7 +296,7 @@ function applyProfile() {
   $('dOut').style.fontSize = '.8em';
 
   const prev = nav;
-  nav = new Navigator({ grid, destinations: DESTINATIONS, settings });
+  nav = new Navigator({ grid, destinations, settings });
   if (prev?.dest && prev.state === 'navigating') {
     dispatch(nav.goTo(prev.dest.id, pose));
   }
@@ -294,6 +313,7 @@ function refreshText() {
 
 // --- simulated user: follows the guidance at walking pace --------------------
 function simTick() {
+  if (AR) return;
   if (nav.state !== 'navigating' || !nav.waypoints.length) return;
   const wp = nav.waypoints[0];
   const rel = relativeBearing(pose, wp);
@@ -367,36 +387,50 @@ function updateReadout() {
 // --- map ---------------------------------------------------------------------
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
+// Demo: the whole room fits the canvas. AR: an 10 m window that follows the user.
+function view(cv) {
+  if (!AR) return { sc: SCALE, ox: 0, oy: 0 };
+  const sc = cv.width / 1000;
+  return { sc, ox: cv.width / 2 - pose.x * sc, oy: cv.height / 2 - pose.y * sc };
+}
+
 function render() {
   updateReadout();
   const cv = $('map');
   if (!settings.screen) return;
   const ctx = cv.getContext('2d');
+  const { sc, ox, oy } = view(cv);
+  const X = (x) => x * sc + ox;
+  const Y = (y) => y * sc + oy;
   ctx.clearRect(0, 0, cv.width, cv.height);
   ctx.fillStyle = cssVar('--m-floor');
   ctx.fillRect(0, 0, cv.width, cv.height);
-  const s = CELL_CM * SCALE;
+  const s = CELL_CM * sc;
   const wall = cssVar('--m-wall');
   const obst = cssVar('--m-obst');
   const low = cssVar('--m-low');
   const tight = cssVar('--m-tight');
   for (let r = 0; r < grid.rows; r++) {
+    const py = r * s + oy;
+    if (py > cv.height || py + s < 0) continue;
     for (let c = 0; c < grid.cols; c++) {
+      const px = c * s + ox;
+      if (px > cv.width || px + s < 0) continue;
       const i = grid.idx(c, r);
       const h = grid.h[i];
       if (h > 0) ctx.fillStyle = h >= WALL ? wall : h > settings.maxStepCm ? obst : low;
       else if (!analysis.passable[i]) ctx.fillStyle = tight;
       else continue;
-      ctx.fillRect(c * s, r * s, s + 0.5, s + 0.5);
+      ctx.fillRect(px, py, s + 0.5, s + 0.5);
     }
   }
   const ink = cssVar('--ink');
   const primary = cssVar('--m-path');
   ctx.font = `600 ${26 * Math.max(1, settings.fontScale * 0.85)}px ${cssVar('--f-body')}`;
   ctx.textBaseline = 'middle';
-  for (const d of DESTINATIONS) {
-    const x = d.pos.x * SCALE;
-    const y = d.pos.y * SCALE;
+  for (const d of destinations) {
+    const x = X(d.pos.x);
+    const y = Y(d.pos.y);
     ctx.fillStyle = cssVar('--surface');
     ctx.strokeStyle = ink;
     ctx.lineWidth = 4;
@@ -404,7 +438,7 @@ function render() {
     ctx.arc(x, y, 12, 0, 7);
     ctx.fill();
     ctx.stroke();
-    const label = L.dests[d.id];
+    const label = destLabel(d);
     const w = ctx.measureText(label).width;
     const lx = x + 20 + w > cv.width - 10 ? x - 20 - w : x + 20;
     ctx.lineWidth = 6;
@@ -420,21 +454,21 @@ function render() {
     ctx.lineJoin = 'round';
     ctx.setLineDash([22, 14]);
     ctx.beginPath();
-    ctx.moveTo(pose.x * SCALE, pose.y * SCALE);
-    for (const w of nav.waypoints) ctx.lineTo(w.x * SCALE, w.y * SCALE);
+    ctx.moveTo(X(pose.x), Y(pose.y));
+    for (const w of nav.waypoints) ctx.lineTo(X(w.x), Y(w.y));
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = primary;
     for (const w of nav.waypoints) {
       ctx.beginPath();
-      ctx.arc(w.x * SCALE, w.y * SCALE, 9, 0, 7);
+      ctx.arc(X(w.x), Y(w.y), 9, 0, 7);
       ctx.fill();
     }
   }
   ctx.save();
-  ctx.translate(pose.x * SCALE, pose.y * SCALE);
+  ctx.translate(X(pose.x), Y(pose.y));
   ctx.rotate((pose.heading * Math.PI) / 180);
-  const lost = localization < 0.6;
+  const lost = AR ? arTracking !== 'TRACKING' : localization < 0.6;
   ctx.fillStyle = lost ? cssVar('--danger') : ink;
   ctx.strokeStyle = cssVar('--m-floor');
   ctx.lineWidth = 5;
@@ -452,10 +486,15 @@ function render() {
 // --- input -------------------------------------------------------------------
 function runCommand(text) {
   if (!text.trim()) return;
-  dispatch(nav.handle(parseCommand(text, DESTINATIONS), pose, performance.now()));
+  dispatch(nav.handle(parseCommand(text, destinations), pose, performance.now()));
 }
 
 function setupMic() {
+  if (AR) {
+    // Android WebView has no SpeechRecognition; the native recognizer answers via __arCommand.
+    $('micBtn').addEventListener('click', () => window.Android.listen(L.lang));
+    return;
+  }
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
     $('micBtn').disabled = true;
@@ -485,6 +524,7 @@ function vaultMsg(text) {
 }
 
 function reset() {
+  if (AR) return;
   grid = buildDemoRoom();
   pose = { ...START_POSE };
   localization = 1;
@@ -525,8 +565,9 @@ $('relocBtn').addEventListener('click', () => {
 $('resetBtn').addEventListener('click', reset);
 $('map').addEventListener('click', (e) => {
   const rect = $('map').getBoundingClientRect();
-  const x = ((e.clientX - rect.left) / rect.width) * 600;
-  const y = ((e.clientY - rect.top) / rect.height) * 500;
+  const v = view($('map'));
+  const x = (((e.clientX - rect.left) / rect.width) * $('map').width - v.ox) / v.sc;
+  const y = (((e.clientY - rect.top) / rect.height) * $('map').height - v.oy) / v.sc;
   const ev = nav.addObstacle({ x0: x - 20, y0: y - 20, x1: x + 20, y1: y + 20, height: 40 }, pose, performance.now());
   analysis = analyze(grid, settings);
   dispatch(ev);
@@ -564,3 +605,85 @@ applyProfile();
 setupMic();
 setInterval(simTick, TICK_MS);
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', render);
+
+// --- ARCore bridge (Android app only) -----------------------------------------
+let saveTimer;
+function persist() {
+  if (!AR) return;
+  if (saveTimer) return; // throttle: at most one save per 5 s while frames keep arriving
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      window.Android.secureSave(JSON.stringify({ v: 1, grid: grid.toSparse(), home, destinations, profile: profileInput }));
+    } catch {
+      /* the native side reports storage problems */
+    }
+  }, 5000);
+}
+
+function restore() {
+  try {
+    const raw = window.Android.secureLoad();
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    grid = Grid.fromSparse(d.grid);
+    destinations = d.destinations;
+    home = d.home;
+    aligner = new Aligner(home);
+    pointMap = new PointMap(grid, aligner);
+    if (d.profile) {
+      writeForm(d.profile);
+      applyLang();
+    }
+  } catch {
+    /* corrupt or missing: start with an empty map */
+  }
+}
+
+// Called by the native side about 10 times a second with one ARCore frame:
+// { tracking, x, z, fx, fz, floorY, points: [x, y, z, ...] } in ARCore world metres.
+window.__arFrame = (f) => {
+  arTracking = f.tracking;
+  const r = handleFrame({ f, nav, aligner, pointMap, now: performance.now() });
+  if (r.pose) pose = r.pose;
+  dispatch(r.events);
+  persist();
+};
+
+// Status notes from native code (missing voice, camera, ARCore). Spoken and logged.
+const NOTES = {
+  mk: {
+    tts_fallback: 'Македонскиот глас не е инсталиран. Користам близок глас.',
+    tts_missing: 'Нема инсталиран глас за говор. Инсталирај глас во поставките на телефонот.',
+    stt_maybe_online: 'Офлајн препознавање на говор не е инсталирано. Звукот може да оди преку интернет.',
+    stt_missing: 'Препознавањето на говор не е достапно на овој телефон.',
+    camera_denied: 'Треба дозвола за камера за да знам каде си.',
+    camera_busy: 'Камерата е зафатена од друга апликација.',
+    arcore_unavailable: 'ARCore не е достапен на овој телефон.',
+  },
+  en: {
+    tts_fallback: 'The Macedonian voice is not installed. Using a close voice.',
+    tts_missing: 'No speech voice is installed. Install one in the phone settings.',
+    stt_maybe_online: 'Offline speech recognition is not installed. Audio may go over the internet.',
+    stt_missing: 'Speech recognition is not available on this phone.',
+    camera_denied: 'Camera permission is needed to know where you are.',
+    camera_busy: 'The camera is in use by another app.',
+    arcore_unavailable: 'ARCore is not available on this phone.',
+  },
+};
+window.__arNote = (key) => {
+  const t = (NOTES[$('lang').value] ?? NOTES.mk)[key];
+  if (t) speak(t);
+  else log(key);
+};
+
+// Voice recognition result from the native recognizer.
+window.__arCommand = (text) => runCommand(text);
+
+if (AR) {
+  document.body.dataset.mode = 'ar';
+  restore();
+  applyProfile();
+  buildDestButtons();
+  window.Android.ready?.();
+}

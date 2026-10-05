@@ -124,7 +124,12 @@ export class Navigator {
 
   // A new object was detected. Replan only if it actually blocks the route.
   addObstacle(rect, pose, now = Date.now()) {
-    this.grid.setRect(rect.x0, rect.y0, rect.x1, rect.y1, rect.height);
+    return this.addObstacles([rect], pose, now);
+  }
+
+  addObstacles(rects, pose, now = Date.now()) {
+    for (const rect of rects) this.grid.setRect(rect.x0, rect.y0, rect.x1, rect.y1, rect.height);
+    if (!rects.length) return [];
     if (this.state !== 'navigating') return [];
     this.analysis = analyze(this.grid, this.settings);
     if (routeIsClear(this.grid, this.analysis, pose, this.waypoints)) return [];
@@ -187,12 +192,20 @@ export class Navigator {
     return [{ type: 'say', text: this.t.where(this.destName(best.d), hour, this.t.num(meters), this.t.unit(meters)) }];
   }
 
+  // Save the current spot under a spoken name (used when mapping a real room).
+  remember(name, pose) {
+    if (!name) return [{ type: 'say', text: this.t.noName }];
+    this.destinations.push({ id: `u${this.destinations.length + 1}`, pos: { x: pose.x, y: pose.y }, names: { mk: [name], en: [name] } });
+    return [{ type: 'say', text: this.t.remembered(name) }, { type: 'dests' }];
+  }
+
   // Dispatch a parsed voice command.
   handle(cmd, pose, now = Date.now()) {
     switch (cmd.type) {
       case 'stop': return this.stop();
       case 'repeat': return this.repeat(pose, now);
       case 'where': return this.where(pose);
+      case 'remember': return this.remember(cmd.name, pose);
       case 'resume': return this.resume(pose, now);
       case 'go': return cmd.dest ? this.goTo(cmd.dest, pose, now) : [{ type: 'say', text: this.t.unknown }];
       default: return [{ type: 'say', text: this.t.unknown }];

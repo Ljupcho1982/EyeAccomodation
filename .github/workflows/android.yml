@@ -1,0 +1,26 @@
+name: Android debug APK
+
+on:
+  push:
+    branches: [claude/inspiring-goodall-h357oo]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm test
+      - run: npm run build
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: 8.7 }
+      - run: gradle -p android assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: navigator-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
