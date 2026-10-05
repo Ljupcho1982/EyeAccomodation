@@ -22,6 +22,7 @@ const I18N = {
     console: 'Сега', toNext: 'до следната точка', goTo: 'Оди до', command: 'Команда', cmdPh: 'оди до кујна', mic: 'Говор',
     simulate: 'Симулатор', stop: 'Стоп', resume: 'Продолжи', lose: 'Изгуби локализација', reloc: 'Потврди локација', reset: 'Рестарт',
     map: 'Просторија 6 × 5 m, мрежа од 5 cm',
+    mapAr: 'Мапа од камерата, мрежа од 5 cm',
     lgWall: 'Ѕид, мебел', lgLow: 'Низок, поминлив', lgTight: 'Претесно за профилот', lgRoute: 'Рута',
     hint: 'Кликни на мапата за да се појави нов предмет од 40 cm.',
     profile: 'Профил', preset: 'Основа',
@@ -67,6 +68,7 @@ const I18N = {
     console: 'Now', toNext: 'to next point', goTo: 'Go to', command: 'Command', cmdPh: 'go to kitchen', mic: 'Speak',
     simulate: 'Simulator', stop: 'Stop', resume: 'Resume', lose: 'Lose localization', reloc: 'Confirm location', reset: 'Restart',
     map: 'Room 6 × 5 m, 5 cm grid',
+    mapAr: 'Map from the camera, 5 cm grid',
     lgWall: 'Wall, furniture', lgLow: 'Low, passable', lgTight: 'Too tight for profile', lgRoute: 'Route',
     hint: 'Click the map to drop a new 40 cm object.',
     profile: 'Profile', preset: 'Preset',
@@ -148,7 +150,7 @@ const hasChair = () => ['wheelchair', 'combined'].includes(preset());
 function applyLang() {
   L = I18N[$('lang').value] ?? I18N.mk;
   document.documentElement.lang = $('lang').value;
-  document.querySelectorAll('[data-i18n]').forEach((el) => (el.textContent = L[el.dataset.i18n]));
+  document.querySelectorAll('[data-i18n]').forEach((el) => (el.textContent = L[AR && el.dataset.i18n === 'map' ? 'mapAr' : el.dataset.i18n]));
   document.querySelectorAll('[data-i18n-ph]').forEach((el) => (el.placeholder = L[el.dataset.i18nPh]));
   document.querySelectorAll('[data-i18n-aria]').forEach((el) => el.setAttribute('aria-label', L[el.dataset.i18nAria]));
   for (const sel of ['field', 'light', 'approved']) {
