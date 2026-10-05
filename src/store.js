@@ -2,12 +2,17 @@
 // key derived from a user passphrase (PBKDF2). `storage` is anything with
 // getItem/setItem (localStorage in the browser, a stub in tests).
 
-const subtle = globalThis.crypto.subtle;
+const subtle = globalThis.crypto?.subtle;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 export const KDF_ITERATIONS = 310000;
 
-const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const b64 = (buf) => {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+};
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 async function deriveKey(pass, salt, iterations) {

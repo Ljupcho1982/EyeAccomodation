@@ -1,0 +1,1624 @@
+<!doctype html>
+<html lang="mk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Навигатор</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Unbounded:wght@600;700&display=swap">
+<style>
+/* Layout: left column is the live console (status, clock dial, instruction, destinations);
+   right column is the room map. Profile and vault sit under them. One column on a phone. */
+:root {
+  --bg:#EDF1F0; --surface:#F8FAF9; --raised:#FFFFFF; --ink:#14262C; --muted:#52666C; --line:#C9D5D5;
+  --primary:#0F5C6E; --primary-ink:#FFFFFF; --signal:#9A4A07; --signal-bg:#FBEFD3;
+  --danger:#B42318; --danger-bg:#FCE8E4; --ok:#17704D; --ok-bg:#DCF2E6;
+  --m-floor:#F8FAF9; --m-wall:#14262C; --m-obst:#78898E; --m-low:#E1BE72; --m-tight:rgba(154,74,7,.17); --m-path:#0F5C6E;
+  --f-display:'Unbounded', 'Golos Text', system-ui, sans-serif;
+  --f-body:'Golos Text', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --f-mono:'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  --fs:1; --r:14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#0C171B; --surface:#112027; --raised:#172B33; --ink:#E7F0F1; --muted:#98AEB3; --line:#27424C;
+    --primary:#62C4D8; --primary-ink:#06222A; --signal:#F2B84B; --signal-bg:#2D2410;
+    --danger:#FF9A8B; --danger-bg:#34171A; --ok:#6FD9A5; --ok-bg:#123225;
+    --m-floor:#112027; --m-wall:#A9BFC4; --m-obst:#5C7279; --m-low:#8A6D2B; --m-tight:rgba(242,184,75,.15); --m-path:#62C4D8;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0C171B; --surface:#112027; --raised:#172B33; --ink:#E7F0F1; --muted:#98AEB3; --line:#27424C;
+  --primary:#62C4D8; --primary-ink:#06222A; --signal:#F2B84B; --signal-bg:#2D2410;
+  --danger:#FF9A8B; --danger-bg:#34171A; --ok:#6FD9A5; --ok-bg:#123225;
+  --m-floor:#112027; --m-wall:#A9BFC4; --m-obst:#5C7279; --m-low:#8A6D2B; --m-tight:rgba(242,184,75,.15); --m-path:#62C4D8;
+  color-scheme: dark;
+}
+/* Low-vision profiles switch the whole app to maximum contrast. */
+:root[data-contrast="high"] {
+  --bg:#000; --surface:#000; --raised:#101010; --ink:#fff; --muted:#e8e8e8; --line:#fff;
+  --primary:#FFD400; --primary-ink:#000; --signal:#FFD400; --signal-bg:#1c1700;
+  --danger:#FF8A80; --danger-bg:#2a0d0b; --ok:#7CFC9A; --ok-bg:#062b12;
+  --m-floor:#000; --m-wall:#fff; --m-obst:#bdbdbd; --m-low:#a67c00; --m-tight:rgba(255,212,0,.26); --m-path:#FFD400;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background:var(--bg); color:var(--ink); font-family:var(--f-body); font-size:calc(16px*var(--fs)); line-height:1.5; padding-inline:16px; padding-block:12px 40px; }
+.app { max-width:1180px; margin:0 auto; }
+h1,h2,h3,p { margin:0; }
+button, input, select { font:inherit; color:inherit; }
+:focus-visible { outline:3px solid var(--primary); outline-offset:2px; }
+:root[data-contrast="high"] :focus-visible { outline-color:#fff; }
+
+.top { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px 20px; padding-block:12px 20px; }
+.brand { display:flex; align-items:center; gap:14px; min-width:0; }
+.brand svg { flex:none; width:44px; height:44px; color:var(--primary); }
+.brand h1 { font-family:var(--f-display); font-weight:700; font-size:1.55em; letter-spacing:-.02em; line-height:1.1; }
+.brand p { color:var(--muted); font-size:.9em; max-width:42ch; text-wrap:balance; }
+.tools { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.sel { appearance:none; background:var(--surface); border:1.5px solid var(--line); border-radius:10px; padding:9px 12px; min-height:44px; }
+.icon-btn { min-width:44px; min-height:44px; border-radius:10px; border:1.5px solid var(--line); background:var(--surface); cursor:pointer; display:grid; place-items:center; }
+.icon-btn svg { width:20px; height:20px; }
+
+.layout { display:grid; gap:16px; grid-template-columns:minmax(0,1fr); grid-template-areas:"console" "map" "profile" "log" "vault"; }
+@media (min-width: 940px) {
+  .layout { grid-template-columns:minmax(0,400px) minmax(0,1fr); grid-template-areas:"console map" "profile map" "profile log" "vault log"; align-items:start; }
+}
+.card { background:var(--surface); border:1.5px solid var(--line); border-radius:var(--r); padding:18px; min-width:0; }
+.card > h2 { font-family:var(--f-display); font-weight:600; font-size:.8em; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:14px; }
+#console{grid-area:console} #mapcard{grid-area:map} #profile{grid-area:profile} #logcard{grid-area:log} #vault{grid-area:vault}
+
+/* status */
+.status { display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:999px; border:1.5px solid var(--line); background:var(--raised); font-weight:600; width:100%; }
+.status i { flex:none; width:12px; height:12px; border-radius:50%; background:var(--muted); }
+.status.navigating { border-color:var(--ok); color:var(--ok); } .status.navigating i { background:var(--ok); animation:pulse 1.6s ease-in-out infinite; }
+.status.stopped { border-color:var(--danger); color:var(--danger); background:var(--danger-bg); } .status.stopped i { background:var(--danger); }
+.status.arrived { border-color:var(--primary); color:var(--primary); } .status.arrived i { background:var(--primary); }
+@keyframes pulse { 50% { opacity:.35; } }
+
+/* dial */
+.nowrow { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; align-items:center; margin-block:16px 8px; }
+.dial { width:100%; max-width:230px; justify-self:center; aspect-ratio:1; }
+.dial svg { width:100%; height:100%; display:block; overflow:visible; }
+.dial .ring { fill:var(--raised); stroke:var(--line); stroke-width:2; }
+.dial .tick { stroke:var(--muted); stroke-width:2; }
+.dial text { font-family:var(--f-mono); font-size:15px; fill:var(--muted); text-anchor:middle; dominant-baseline:central; }
+.dial text.hit { fill:var(--primary-ink); font-weight:600; }
+.dial .hitbg { fill:var(--primary); }
+.dial .needle { fill:var(--primary); }
+.dial .you { fill:var(--ink); }
+.dial .ahead { fill:var(--ink); }
+.read { min-width:0; }
+.read .num { font-family:var(--f-display); font-weight:700; font-size:2.6em; line-height:1; letter-spacing:-.03em; font-variant-numeric:tabular-nums; }
+.read .unit { font-family:var(--f-mono); font-size:.85em; color:var(--muted); margin-left:4px; }
+.read .lbl { color:var(--muted); font-size:.82em; margin-top:6px; }
+.read .clock { margin-top:10px; font-family:var(--f-mono); font-weight:500; }
+.instruction { font-size:1.2em; font-weight:600; line-height:1.35; text-wrap:balance; min-height:3.2em; padding:12px 14px; border-radius:12px; background:var(--raised); border:1.5px solid var(--line); }
+
+/* haptic */
+.haptic { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:12px; align-items:center; margin-block:12px; }
+.haptic .pad { display:flex; gap:6px; align-items:center; justify-content:center; width:72px; height:40px; border-radius:10px; border:1.5px solid var(--line); background:var(--raised); }
+.haptic .pad i { display:block; border-radius:50%; background:var(--line); transition:background .08s; }
+.haptic .L i { width:10px; height:10px; } .haptic .R i { width:22px; height:22px; }
+.haptic .pad.on { border-color:var(--primary); } .haptic .pad.on i { background:var(--primary); }
+.haptic .pad.lost.on { border-color:var(--danger); } .haptic .pad.lost.on i { background:var(--danger); }
+.haptic p { text-align:center; color:var(--muted); font-size:.85em; }
+
+/* controls */
+.row { display:flex; flex-wrap:wrap; gap:8px; }
+.btn { min-height:48px; padding:10px 16px; border-radius:12px; border:1.5px solid var(--primary); background:var(--primary); color:var(--primary-ink); font-weight:600; cursor:pointer; }
+.btn.ghost { background:transparent; color:var(--primary); }
+.btn.danger { border-color:var(--danger); color:var(--danger); background:transparent; }
+.btn:disabled { opacity:.45; cursor:not-allowed; }
+.btn:active { transform:translateY(1px); }
+.sub { font-size:.8em; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-block:18px 8px; font-weight:600; }
+.dests .btn { flex:1 1 calc(50% - 8px); }
+.cmd { display:flex; gap:8px; }
+.cmd input { flex:1; min-width:0; }
+.field { width:100%; background:var(--raised); border:1.5px solid var(--line); border-radius:10px; padding:11px 12px; min-height:46px; }
+
+/* map */
+.mapwrap { border-radius:12px; overflow:hidden; border:1.5px solid var(--line); background:var(--m-floor); }
+#map { display:block; width:100%; height:auto; cursor:crosshair; touch-action:manipulation; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:12px; font-size:.85em; color:var(--muted); }
+.legend span { display:inline-flex; align-items:center; gap:8px; }
+.legend b { width:16px; height:16px; border-radius:4px; border:1px solid var(--line); display:inline-block; }
+.hint { margin-top:10px; color:var(--muted); font-size:.88em; }
+.screenoff { padding:28px 18px; text-align:center; font-weight:600; }
+
+/* profile form */
+.presets { border:0; padding:0; margin:0 0 6px; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.presets label { position:relative; display:block; min-width:0; }
+.presets input { position:absolute; opacity:0; inset:0; }
+.presets span { display:flex; align-items:center; min-height:56px; padding:8px 12px; border-radius:12px; border:1.5px solid var(--line); background:var(--raised); font-weight:600; line-height:1.25; cursor:pointer; }
+.presets input:checked + span { border-color:var(--primary); box-shadow:inset 0 0 0 1.5px var(--primary); color:var(--primary); }
+.presets input:focus-visible + span { outline:3px solid var(--primary); outline-offset:2px; }
+.fld { display:grid; gap:6px; margin-top:14px; min-width:0; }
+.field { max-width:100%; min-width:0; }
+.fld > label, .fld > span.l { font-weight:600; font-size:.92em; }
+.fld small { color:var(--muted); font-size:.82em; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.derived { margin-top:18px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.derived div { background:var(--raised); border:1.5px solid var(--line); border-radius:12px; padding:10px; min-width:0; }
+.derived b { display:block; font-family:var(--f-mono); font-size:1.15em; font-variant-numeric:tabular-nums; }
+.derived span { font-size:.75em; color:var(--muted); line-height:1.25; display:block; }
+.warns { list-style:none; margin:14px 0 0; padding:0; display:grid; gap:8px; }
+.warns li { padding:10px 12px; border-radius:10px; background:var(--signal-bg); color:var(--signal); font-size:.88em; font-weight:500; }
+
+/* log */
+.log { list-style:none; margin:0; padding:0; max-height:320px; overflow:auto; display:grid; gap:6px; }
+.log li { padding:8px 12px; border-radius:10px; background:var(--raised); border:1px solid var(--line); font-size:.92em; }
+.log li:first-child { border-color:var(--primary); }
+.log li small { font-family:var(--f-mono); color:var(--muted); margin-right:8px; }
+.note { margin-top:24px; padding:14px 16px; border-radius:var(--r); border:1.5px dashed var(--line); color:var(--muted); font-size:.88em; text-wrap:pretty; }
+
+@media (max-width:420px) {
+  .nowrow { grid-template-columns:1fr; } .read { text-align:center; }
+  .brand h1 { font-size:1.35em; } .derived { grid-template-columns:1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .status i, .dial .needle { animation:none; transition:none; } }
+
+</style>
+<style>body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><circle cx="24" cy="24" r="21" stroke="currentColor" stroke-width="3"/><path d="M24 9v6M24 33v6M9 24h6M33 24h6" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M24 14l6 20-6-4-6 4z" fill="currentColor"/></svg>
+      <div>
+        <h1>Навигатор</h1>
+        <p data-i18n="tagline"></p>
+      </div>
+    </div>
+    <div class="tools">
+      <select id="lang" class="sel" aria-label="Јазик / Language"><option value="mk">Македонски</option><option value="en">English</option></select>
+      <button id="themeBtn" class="icon-btn" type="button" data-i18n-aria="theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/></svg></button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card" id="console" aria-labelledby="h-console">
+      <h2 id="h-console" data-i18n="console"></h2>
+      <div id="status" class="status" role="status" aria-live="assertive"><i></i><span id="statusText"></span></div>
+
+      <div class="nowrow">
+        <div class="dial"><svg id="dial" viewBox="0 0 220 220" role="img" data-i18n-aria="dialLabel"></svg></div>
+        <div class="read">
+          <div><span class="num" id="meters">—</span><span class="unit" id="unit">m</span></div>
+          <div class="lbl" data-i18n="toNext"></div>
+          <div class="clock" id="clock">—</div>
+          <div class="lbl" id="total"></div>
+        </div>
+      </div>
+
+      <p class="instruction" id="instruction" aria-live="assertive"></p>
+
+      <div class="haptic" aria-hidden="true">
+        <div class="pad L" id="hapL"><i></i><i></i></div>
+        <p id="hapText"></p>
+        <div class="pad R" id="hapR"><i></i></div>
+      </div>
+
+      <h3 class="sub" data-i18n="goTo"></h3>
+      <div class="row dests" id="dests"></div>
+
+      <h3 class="sub" data-i18n="command"></h3>
+      <div class="cmd">
+        <input id="cmd" class="field" type="text" data-i18n-ph="cmdPh" autocomplete="off">
+        <button id="micBtn" class="btn ghost" type="button" data-i18n-aria="mic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <button id="cmdBtn" class="btn" type="button">OK</button>
+      </div>
+
+      <h3 class="sub" data-i18n="simulate"></h3>
+      <div class="row">
+        <button id="stopBtn" class="btn danger" type="button" data-i18n="stop"></button>
+        <button id="resumeBtn" class="btn ghost" type="button" data-i18n="resume"></button>
+        <button id="lostBtn" class="btn ghost" type="button" data-i18n="lose"></button>
+        <button id="relocBtn" class="btn ghost" type="button" data-i18n="reloc"></button>
+        <button id="resetBtn" class="btn ghost" type="button" data-i18n="reset"></button>
+      </div>
+    </section>
+
+    <section class="card" id="mapcard" aria-labelledby="h-map">
+      <h2 id="h-map" data-i18n="map"></h2>
+      <div class="mapwrap"><canvas id="map" width="1440" height="1200" role="img" data-i18n-aria="mapLabel"></canvas></div>
+      <p class="screenoff" id="screenoff" hidden></p>
+      <div class="legend" id="legend"></div>
+      <p class="hint" id="hint"></p>
+    </section>
+
+    <section class="card" id="profile" aria-labelledby="h-profile">
+      <h2 id="h-profile" data-i18n="profile"></h2>
+      <fieldset class="presets" id="presets">
+        <legend class="sr" style="position:absolute;left:-9999px" data-i18n="preset"></legend>
+        <label><input type="radio" name="preset" value="blind"><span data-i18n="p_blind"></span></label>
+        <label><input type="radio" name="preset" value="lowvision"><span data-i18n="p_low"></span></label>
+        <label><input type="radio" name="preset" value="wheelchair" checked><span data-i18n="p_wheel"></span></label>
+        <label><input type="radio" name="preset" value="combined"><span data-i18n="p_comb"></span></label>
+      </fieldset>
+
+      <div class="fld">
+        <label for="acuity" data-i18n="acuity"></label>
+        <input id="acuity" class="field" type="number" min="0" max="1.2" step="0.01" value="1" inputmode="decimal">
+        <small data-i18n="acuityHelp"></small>
+      </div>
+      <div class="two">
+        <div class="fld"><label for="field" data-i18n="fieldLoss"></label>
+          <select id="field" class="field"><option value="none"></option><option value="tunnel"></option><option value="left"></option><option value="right"></option><option value="central"></option></select></div>
+        <div class="fld"><label for="light" data-i18n="light"></label>
+          <select id="light" class="field"><option value="normal"></option><option value="light-only"></option><option value="none"></option></select></div>
+      </div>
+      <div class="two" id="wheelFields">
+        <div class="fld"><label for="width" data-i18n="width"></label><input id="width" class="field" type="number" min="60" max="120" value="65" inputmode="numeric"></div>
+        <div class="fld"><label for="thr" data-i18n="thr"></label><input id="thr" class="field" type="number" min="0" max="8" step="0.5" value="2" inputmode="decimal"></div>
+      </div>
+      <div class="fld"><label for="approved" data-i18n="approved"></label>
+        <select id="approved" class="field"><option value="self"></option><option value="professional"></option></select></div>
+
+      <div class="derived" aria-live="polite">
+        <div><b id="dPass">—</b><span data-i18n="dPass"></span></div>
+        <div><b id="dStep">—</b><span data-i18n="dStep"></span></div>
+        <div><b id="dOut">—</b><span data-i18n="dOut"></span></div>
+      </div>
+      <ul class="warns" id="warnings" aria-live="polite"></ul>
+    </section>
+
+    <section class="card" id="logcard" aria-labelledby="h-log">
+      <h2 id="h-log" data-i18n="log"></h2>
+      <ol class="log" id="log" aria-live="polite"></ol>
+    </section>
+
+    <section class="card" id="vault" aria-labelledby="h-vault">
+      <h2 id="h-vault" data-i18n="vault"></h2>
+      <div class="fld" style="margin-top:0"><label for="pass" data-i18n="pass"></label><input id="pass" class="field" type="password" autocomplete="off"><small data-i18n="vaultHelp"></small></div>
+      <div class="row" style="margin-top:12px">
+        <button id="saveBtn" class="btn ghost" type="button" data-i18n="save"></button>
+        <button id="loadBtn" class="btn ghost" type="button" data-i18n="load"></button>
+      </div>
+      <p class="hint" id="vaultMsg" role="status"></p>
+    </section>
+  </main>
+
+  <p class="note" data-i18n="note"></p>
+</div>
+
+<script>
+(() => {
+'use strict';
+// Occupancy grid with 5 cm cells. Each cell stores the height (cm) of whatever
+// stands on it: 0 = bare floor, small values = thresholds/rugs, WALL = wall.
+const CELL_CM = 5;
+const WALL = 1000;
+
+class Grid {
+  constructor(widthCm, heightCm) {
+    this.cols = Math.round(widthCm / CELL_CM);
+    this.rows = Math.round(heightCm / CELL_CM);
+    this.h = new Float32Array(this.cols * this.rows);
+  }
+
+  idx(c, r) {
+    return r * this.cols + c;
+  }
+
+  inBounds(c, r) {
+    return c >= 0 && r >= 0 && c < this.cols && r < this.rows;
+  }
+
+  cellOf(xCm, yCm) {
+    return { c: Math.floor(xCm / CELL_CM), r: Math.floor(yCm / CELL_CM) };
+  }
+
+  centerOf(c, r) {
+    return { x: (c + 0.5) * CELL_CM, y: (r + 0.5) * CELL_CM };
+  }
+
+  // Raise every cell touched by the rectangle to at least `heightCm`.
+  setRect(x0, y0, x1, y1, heightCm) {
+    const a = this.cellOf(Math.min(x0, x1), Math.min(y0, y1));
+    const b = this.cellOf(Math.max(x0, x1) - 1e-6, Math.max(y0, y1) - 1e-6);
+    for (let r = Math.max(0, a.r); r <= Math.min(this.rows - 1, b.r); r++) {
+      for (let c = Math.max(0, a.c); c <= Math.min(this.cols - 1, b.c); c++) {
+        const i = this.idx(c, r);
+        if (heightCm > this.h[i]) this.h[i] = heightCm;
+      }
+    }
+  }
+
+  clearRect(x0, y0, x1, y1) {
+    const a = this.cellOf(Math.min(x0, x1), Math.min(y0, y1));
+    const b = this.cellOf(Math.max(x0, x1) - 1e-6, Math.max(y0, y1) - 1e-6);
+    for (let r = Math.max(0, a.r); r <= Math.min(this.rows - 1, b.r); r++) {
+      for (let c = Math.max(0, a.c); c <= Math.min(this.cols - 1, b.c); c++) {
+        this.h[this.idx(c, r)] = 0;
+      }
+    }
+  }
+
+  addBorder(thicknessCm = CELL_CM) {
+    const w = this.cols * CELL_CM;
+    const h = this.rows * CELL_CM;
+    this.setRect(0, 0, w, thicknessCm, WALL);
+    this.setRect(0, h - thicknessCm, w, h, WALL);
+    this.setRect(0, 0, thicknessCm, h, WALL);
+    this.setRect(w - thicknessCm, 0, w, h, WALL);
+  }
+
+  toJSON() {
+    return { cols: this.cols, rows: this.rows, h: Array.from(this.h) };
+  }
+
+  static fromJSON(o) {
+    const g = new Grid(o.cols * CELL_CM, o.rows * CELL_CM);
+    g.h.set(o.h);
+    return g;
+  }
+}
+
+// User profile -> navigation settings.
+//
+// Diopters are deliberately NOT used: they describe the refractive error that
+// glasses correct, not how a person moves through a room. The profile uses
+// functional parameters instead: corrected visual acuity, visual field,
+// light perception, and (for wheelchair users) the real chair dimensions.
+
+const PRESETS = {
+  blind: { lightPerception: 'none', acuity: 0, fieldLoss: 'none', wheelchair: false },
+  lowvision: { lightPerception: 'normal', acuity: 0.15, fieldLoss: 'none', wheelchair: false },
+  wheelchair: { lightPerception: 'normal', acuity: 1, fieldLoss: 'none', wheelchair: true },
+  combined: { lightPerception: 'normal', acuity: 0.15, fieldLoss: 'none', wheelchair: true },
+};
+
+const PRESET_CLASS = { blind: 'none', lowvision: 'low', wheelchair: 'normal', combined: 'low' };
+const RANK = { none: 0, low: 1, normal: 2 };
+
+const FIELD_LOSS = ['none', 'tunnel', 'left', 'right', 'central'];
+const LIGHT = ['normal', 'light-only', 'none'];
+
+// Thresholds are defaults to be validated with O&M instructors. 0.05 is the
+// WHO blindness limit (3/60); 0.3 is the WHO low-vision limit (6/18).
+function visionClass({ acuity, fieldLoss, lightPerception }) {
+  if (lightPerception === 'none' || acuity < 0.05) return 'none';
+  if (acuity < 0.3 || fieldLoss !== 'none' || lightPerception === 'light-only') return 'low';
+  return 'normal';
+}
+
+function clamp(v, lo, hi, name, warnings) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) {
+    warnings.push({ code: 'invalid', field: name });
+    return lo;
+  }
+  if (n < lo || n > hi) warnings.push({ code: 'clamped', field: name, lo, hi });
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function makeProfile(input = {}) {
+  const warnings = [];
+  const preset = PRESETS[input.preset] ? input.preset : 'lowvision';
+  const base = PRESETS[preset];
+  const p = {
+    preset,
+    acuity: clamp(input.acuity ?? base.acuity, 0, 1.2, 'acuity', warnings),
+    fieldLoss: FIELD_LOSS.includes(input.fieldLoss) ? input.fieldLoss : base.fieldLoss,
+    lightPerception: LIGHT.includes(input.lightPerception) ? input.lightPerception : base.lightPerception,
+    mobility: {
+      wheelchair: input.wheelchair ?? base.wheelchair,
+      // Below 60 cm the chair cannot physically fit the narrowest passage we avoid.
+      widthCm: clamp(input.widthCm ?? 65, 60, 120, 'widthCm', warnings),
+      maxThresholdCm: clamp(input.maxThresholdCm ?? 2, 0, 8, 'maxThresholdCm', warnings),
+    },
+    approvedBy: input.approvedBy === 'professional' ? 'professional' : 'self',
+    lang: input.lang === 'en' ? 'en' : 'mk',
+  };
+
+  // Safety: if the declared preset is more restrictive than the numbers, trust the preset.
+  const fromParams = visionClass(p);
+  const fromPreset = PRESET_CLASS[preset];
+  p.effectiveClass = RANK[fromPreset] < RANK[fromParams] ? fromPreset : fromParams;
+  if (p.effectiveClass !== fromParams) warnings.push({ code: 'preset_conflict', preset, fromParams });
+  if (p.approvedBy === 'self') warnings.push({ code: 'unverified' });
+  return { profile: p, warnings };
+}
+
+function deriveSettings(profile) {
+  const cls = profile.effectiveClass;
+  const wheel = profile.mobility.wheelchair;
+  let margin = 5;
+  if (cls === 'none') margin += 5; // cane sweep / no visual correction of path
+  if (profile.fieldLoss !== 'none') margin += 5; // obstacles appear late from the sides
+  return {
+    visionClass: cls,
+    wheelchair: wheel,
+    halfWidthCm: (wheel ? profile.mobility.widthCm : 45) / 2,
+    marginCm: margin,
+    maxStepCm: wheel ? profile.mobility.maxThresholdCm : 2,
+    screen: cls !== 'none',
+    highContrast: cls === 'low',
+    fontScale: cls === 'low' ? 1.6 : 1,
+    lang: profile.lang,
+  };
+}
+
+
+const SOFT_CELLS = 4; // prefer paths ~20 cm away from obstacles beyond the hard limit
+const EPS = 1e-6;
+
+// Compute which cells the user can occupy: not blocked by a tall-enough
+// obstacle, and far enough from every blocked cell to fit body/chair + margin.
+function analyze(grid, s) {
+  const { cols, rows } = grid;
+  const n = cols * rows;
+  const blocked = new Uint8Array(n);
+  for (let i = 0; i < n; i++) blocked[i] = grid.h[i] > s.maxStepCm ? 1 : 0;
+
+  const reqCells = (s.halfWidthCm + s.marginCm) / CELL_CM;
+  const softCells = reqCells + SOFT_CELLS;
+  const R = Math.ceil(softCells) + 1;
+  const dist = new Float32Array(n).fill(1e9);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (!blocked[r * cols + c]) continue;
+      for (let dy = -R; dy <= R; dy++) {
+        const nr = r + dy;
+        if (nr < 0 || nr >= rows) continue;
+        for (let dx = -R; dx <= R; dx++) {
+          const nc = c + dx;
+          if (nc < 0 || nc >= cols) continue;
+          const d = Math.hypot(dx, dy);
+          const k = nr * cols + nc;
+          if (d < dist[k]) dist[k] = d;
+        }
+      }
+    }
+  }
+  const passable = new Uint8Array(n);
+  for (let i = 0; i < n; i++) passable[i] = !blocked[i] && dist[i] - 0.5 >= reqCells - EPS ? 1 : 0;
+  return { blocked, dist, passable, reqCells, softCells };
+}
+
+class MinHeap {
+  constructor() {
+    this.a = [];
+  }
+  push(f, v) {
+    const a = this.a;
+    a.push([f, v]);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (a[p][0] <= a[i][0]) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a;
+    const top = a[0];
+    const last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1;
+        const r = l + 1;
+        let m = i;
+        if (l < a.length && a[l][0] < a[m][0]) m = l;
+        if (r < a.length && a[r][0] < a[m][0]) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+  get size() {
+    return this.a.length;
+  }
+}
+
+function lineOfSight(grid, passable, c0, r0, c1, r1, skipStart = false) {
+  let dx = Math.abs(c1 - c0);
+  let dy = Math.abs(r1 - r0);
+  const sx = c0 < c1 ? 1 : -1;
+  const sy = r0 < r1 ? 1 : -1;
+  let err = dx - dy;
+  let c = c0;
+  let r = r0;
+  for (;;) {
+    if (!(skipStart && c === c0 && r === r0) && !passable[r * grid.cols + c]) return false;
+    if (c === c1 && r === r1) return true;
+    const e2 = 2 * err;
+    if (e2 > -dy) {
+      err -= dy;
+      c += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      r += sy;
+    }
+  }
+}
+
+// Plan from `start` to `goal` (both {x,y} in cm). Waypoints are cell centers in cm.
+function plan(grid, s, start, goal, analysis = analyze(grid, s)) {
+  const { cols, rows } = grid;
+  const { passable, dist, softCells } = analysis;
+  const a = grid.cellOf(start.x, start.y);
+  const b = grid.cellOf(goal.x, goal.y);
+  if (!grid.inBounds(a.c, a.r)) return { ok: false, reason: 'start_out' };
+  if (!grid.inBounds(b.c, b.r) || !passable[b.r * cols + b.c]) return { ok: false, reason: 'goal_blocked' };
+
+  const startI = a.r * cols + a.c;
+  const goalI = b.r * cols + b.c;
+  const g = new Float32Array(cols * rows).fill(Infinity);
+  const from = new Int32Array(cols * rows).fill(-1);
+  const closed = new Uint8Array(cols * rows);
+  const heap = new MinHeap();
+  const h = (c, r) => Math.hypot(c - b.c, r - b.r);
+  g[startI] = 0;
+  heap.push(h(a.c, a.r), startI);
+
+  const nb = [
+    [1, 0], [-1, 0], [0, 1], [0, -1],
+    [1, 1], [1, -1], [-1, 1], [-1, -1],
+  ];
+  while (heap.size) {
+    const [, cur] = heap.pop();
+    if (closed[cur]) continue;
+    closed[cur] = 1;
+    if (cur === goalI) break;
+    const cc = cur % cols;
+    const cr = (cur / cols) | 0;
+    for (const [dx, dy] of nb) {
+      const nc = cc + dx;
+      const nr = cr + dy;
+      if (!grid.inBounds(nc, nr)) continue;
+      const ni = nr * cols + nc;
+      if (!passable[ni] || closed[ni]) continue;
+      if (dx && dy && (!passable[cr * cols + nc] || !passable[nr * cols + cc])) continue; // no corner cutting
+      const soft = Math.max(0, softCells - dist[ni]) * 0.3;
+      const ng = g[cur] + (dx && dy ? Math.SQRT2 : 1) + soft;
+      if (ng < g[ni]) {
+        g[ni] = ng;
+        from[ni] = cur;
+        heap.push(ng + h(nc, nr), ni);
+      }
+    }
+  }
+  if (from[goalI] === -1 && startI !== goalI) return { ok: false, reason: 'no_route' };
+
+  const cells = [];
+  for (let i = goalI; i !== -1; i = from[i]) cells.push({ c: i % cols, r: (i / cols) | 0 });
+  cells.reverse();
+
+  // String-pulling: keep only the corners that the clearance-inflated map requires.
+  const pts = [cells[0]];
+  let i = 0;
+  while (i < cells.length - 1) {
+    let j = cells.length - 1;
+    while (j > i + 1 && !lineOfSight(grid, passable, cells[i].c, cells[i].r, cells[j].c, cells[j].r)) j--;
+    pts.push(cells[j]);
+    i = j;
+  }
+  const waypoints = pts.slice(1).map((p) => grid.centerOf(p.c, p.r));
+  let lengthCm = 0;
+  let prev = start;
+  for (const w of waypoints) {
+    lengthCm += Math.hypot(w.x - prev.x, w.y - prev.y);
+    prev = w;
+  }
+  return { ok: true, waypoints, lengthCm };
+}
+
+// Is the remaining route still free after the map changed?
+function routeIsClear(grid, analysis, pose, waypoints) {
+  let prev = grid.cellOf(pose.x, pose.y);
+  let first = true;
+  for (const w of waypoints) {
+    const c = grid.cellOf(w.x, w.y);
+    // The cell the user stands on is exempt: they are already there.
+    if (!lineOfSight(grid, analysis.passable, prev.c, prev.r, c.c, c.r, first)) return false;
+    prev = c;
+    first = false;
+  }
+  return true;
+}
+
+// Guidance in metres and clock positions, plus haptic patterns.
+// Heading convention: degrees clockwise from "up" (-y) on the map.
+// Clock: 12 = straight ahead, 3 = right, 6 = behind, 9 = left.
+
+const HAPTIC_TOL_DEG = 12;
+const TURN_MIN_DEG = 15;
+
+function normalizeAngle(a) {
+  let x = ((a % 360) + 360) % 360;
+  if (x > 180) x -= 360;
+  return x;
+}
+
+function bearingDeg(from, to) {
+  return (Math.atan2(to.x - from.x, -(to.y - from.y)) * 180) / Math.PI;
+}
+
+// Positive = target is to the right of where the user is facing.
+function relativeBearing(pose, target) {
+  return normalizeAngle(bearingDeg(pose, target) - pose.heading);
+}
+
+function clockHour(relDeg) {
+  const h = Math.round(normalizeAngle(relDeg) / 30);
+  return ((h % 12) + 12) % 12 || 12;
+}
+
+// Round to the nearest half metre, never below 0.5.
+function roundMeters(cm) {
+  return Math.max(0.5, Math.round(cm / 50) / 2);
+}
+
+const T = {
+  mk: {
+    num: (m) => String(m).replace('.', ','),
+    unit: (m) => (m === 1 ? 'метар' : 'метри'),
+    turn: (h, m, u) => `Сврти кон ${h} часот, па оди ${m} ${u}.`,
+    ahead: (m, u) => `Оди напред ${m} ${u}.`,
+    start: (d, m, u) => `Рута до ${d}: ${m} ${u}.`,
+    arrived: (d) => `Стигна: ${d}.`,
+    obstacle: 'Нов предмет на патот. Застани. Ја менувам рутата.',
+    noRoute: 'Нема безбеден пат. Застани.',
+    goalBlocked: (d) => `${d} не е безбедно достапно за вашиот профил. Застани.`,
+    locLost: 'Не сум сигурен каде си. Застани и не мрдај.',
+    stopped: 'Застанато.',
+    resumed: 'Продолжуваме.',
+    notNavigating: 'Не се движиме. Кажи „оди до“ и место.',
+    where: (name, h, m, u) => `Најблиску е ${name}, ${m} ${u} кон ${h} часот.`,
+    unknown: 'Не разбрав.',
+    needRelocalize: 'Прво потврди ја локацијата.',
+  },
+  en: {
+    num: (m) => String(m),
+    unit: (m) => (m === 1 ? 'meter' : 'meters'),
+    turn: (h, m, u) => `Turn to ${h} o'clock, then walk ${m} ${u}.`,
+    ahead: (m, u) => `Walk straight ${m} ${u}.`,
+    start: (d, m, u) => `Route to ${d}: ${m} ${u}.`,
+    arrived: (d) => `You have arrived: ${d}.`,
+    obstacle: 'New object on your path. Stop. Rerouting.',
+    noRoute: 'No safe route. Stop.',
+    goalBlocked: (d) => `${d} is not safely reachable for your profile. Stop.`,
+    locLost: "I'm not sure where you are. Stop and stand still.",
+    stopped: 'Stopped.',
+    resumed: 'Continuing.',
+    notNavigating: 'Not navigating. Say "go to" and a place.',
+    where: (name, h, m, u) => `Nearest is ${name}, ${m} ${u} at ${h} o'clock.`,
+    unknown: "I didn't understand.",
+    needRelocalize: 'Confirm your location first.',
+  },
+};
+
+function strings(lang) {
+  return T[lang] ?? T.mk;
+}
+
+function instruction(pose, target, lang = 'mk') {
+  const t = strings(lang);
+  const rel = relativeBearing(pose, target);
+  const m = roundMeters(Math.hypot(target.x - pose.x, target.y - pose.y));
+  const num = t.num(m);
+  const unit = t.unit(m);
+  if (Math.abs(rel) < TURN_MIN_DEG) return { text: t.ahead(num, unit), hour: 12, meters: m, rel };
+  const hour = clockHour(rel);
+  return { text: t.turn(hour, num, unit), hour, meters: m, rel };
+}
+
+// Two light pulses = path is to the left. One strong pulse = path is to the right.
+// Pattern is in navigator.vibrate() format: [on, off, on, ...] milliseconds.
+const HAPTIC = {
+  left: [40, 80, 40],
+  right: [350],
+  lost: [700, 150, 700],
+};
+
+function hapticFor(relDeg, tol = HAPTIC_TOL_DEG) {
+  if (relDeg < -tol) return { side: 'left', pattern: HAPTIC.left };
+  if (relDeg > tol) return { side: 'right', pattern: HAPTIC.right };
+  return { side: 'none', pattern: [] };
+}
+
+// Command grammar for Macedonian and English. Pure text -> intent, so it works
+// with any recognizer (on-device or typed). No network involved here.
+
+const norm = (s) =>
+  s
+    .toLowerCase()
+    .replace(/[.,!?„“"']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const STOP = ['стоп', 'застани', 'пауза', 'stop', 'halt', 'pause'];
+const REPEAT = ['повтори', 'уште еднаш', 'repeat', 'say again'];
+const WHERE = ['каде сум', 'каде се наоѓам', 'where am i'];
+const RESUME = ['продолжи', 'продолжуваме', 'continue', 'resume'];
+const GO = ['оди до', 'оди кон', 'одиме до', 'води ме до', 'одам до', 'go to', 'take me to', 'navigate to'];
+
+const has = (t, list) => list.some((w) => t === w || t.startsWith(w + ' ') || t.includes(' ' + w + ' ') || t.endsWith(' ' + w));
+
+// destinations: [{ id, names: { mk: [...], en: [...] } }]
+function parseCommand(text, destinations = []) {
+  const t = norm(text || '');
+  if (!t) return { type: 'unknown' };
+  if (has(t, STOP)) return { type: 'stop' };
+  if (has(t, WHERE)) return { type: 'where' };
+  if (has(t, REPEAT)) return { type: 'repeat' };
+  if (has(t, RESUME)) return { type: 'resume' };
+  if (GO.some((g) => t.includes(g))) {
+    for (const d of destinations) {
+      const aliases = [...(d.names.mk ?? []), ...(d.names.en ?? [])].map(norm);
+      if (aliases.some((a) => t.includes(a))) return { type: 'go', dest: d.id };
+    }
+    return { type: 'go', dest: null };
+  }
+  return { type: 'unknown' };
+}
+
+// Encrypted on-device storage. The map never leaves the phone: AES-GCM with a
+// key derived from a user passphrase (PBKDF2). `storage` is anything with
+// getItem/setItem (localStorage in the browser, a stub in tests).
+
+const subtle = globalThis.crypto?.subtle;
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+const KDF_ITERATIONS = 310000;
+
+const b64 = (buf) => {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function deriveKey(pass, salt, iterations) {
+  const base = await subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    base,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
+}
+
+async function encrypt(obj, pass, iterations = KDF_ITERATIONS) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(pass, salt, iterations);
+  const data = await subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj)));
+  return { v: 1, it: iterations, salt: b64(salt), iv: b64(iv), data: b64(data) };
+}
+
+async function decrypt(blob, pass) {
+  const key = await deriveKey(pass, unb64(blob.salt), blob.it);
+  try {
+    const plain = await subtle.decrypt({ name: 'AES-GCM', iv: unb64(blob.iv) }, key, unb64(blob.data));
+    return JSON.parse(dec.decode(plain));
+  } catch {
+    throw new Error('wrong_passphrase_or_corrupted');
+  }
+}
+
+const KEY = 'navigator.vault.v1';
+
+async function save(storage, obj, pass, iterations) {
+  storage.setItem(KEY, JSON.stringify(await encrypt(obj, pass, iterations)));
+}
+
+async function load(storage, pass) {
+  const raw = storage.getItem(KEY);
+  if (!raw) return null;
+  return decrypt(JSON.parse(raw), pass);
+}
+
+// Navigation session: ties planner, guidance and safety rules together.
+// Core safety rule: when the system is not sure, it says so and stops.
+
+
+const LOC_MIN = 0.6; // below this localization confidence, navigation halts
+const WP_TOL_CM = 30;
+const GOAL_TOL_CM = 30;
+const HAPTIC_EVERY_MS = 800;
+const REPEAT_OFF_COURSE_MS = 3000;
+
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+class Navigator {
+  constructor({ grid, destinations, settings }) {
+    this.grid = grid;
+    this.destinations = destinations;
+    this.settings = settings;
+    this.state = 'idle'; // idle | navigating | stopped | arrived
+    this.reason = null;
+    this.waypoints = [];
+    this.dest = null;
+    this.needsRelocalize = false;
+    this._announced = null;
+    this._lastSay = -Infinity;
+    this._lastHaptic = -Infinity;
+    this.pose = null;
+  }
+
+  get t() {
+    return strings(this.settings.lang);
+  }
+
+  destName(d) {
+    return d.names[this.settings.lang]?.[0] ?? d.names.mk[0];
+  }
+
+  _halt(reason, say, haptic) {
+    this.state = 'stopped';
+    this.reason = reason;
+    const ev = [{ type: 'say', text: say }];
+    if (haptic) ev.push({ type: 'haptic', pattern: haptic, side: 'lost' });
+    ev.push({ type: 'state', state: this.state, reason });
+    return ev;
+  }
+
+  _plan(pose) {
+    this.analysis = analyze(this.grid, this.settings);
+    return plan(this.grid, this.settings, pose, this.dest.pos, this.analysis);
+  }
+
+  _total(waypoints, pose) {
+    let len = 0;
+    let prev = pose;
+    for (const w of waypoints) {
+      len += dist(prev, w);
+      prev = w;
+    }
+    return roundMeters(len);
+  }
+
+  goTo(destId, pose, now = Date.now()) {
+    const dest = this.destinations.find((d) => d.id === destId);
+    if (!dest) return [{ type: 'say', text: this.t.unknown }];
+    if (this.needsRelocalize) return [{ type: 'say', text: this.t.needRelocalize }];
+    this.dest = dest;
+    this.pose = pose;
+    const res = this._plan(pose);
+    if (!res.ok) {
+      const text = res.reason === 'goal_blocked' ? this.t.goalBlocked(this.destName(dest)) : this.t.noRoute;
+      this.waypoints = [];
+      return this._halt(res.reason, text);
+    }
+    this.waypoints = res.waypoints;
+    this.state = 'navigating';
+    this.reason = null;
+    this._announced = null;
+    const m = this._total(res.waypoints, pose);
+    const ev = [
+      { type: 'say', text: this.t.start(this.destName(dest), this.t.num(m), this.t.unit(m)) },
+      { type: 'state', state: this.state, reason: null },
+    ];
+    return ev.concat(this.update(pose, { localization: 1, now }));
+  }
+
+  update(pose, { localization = 1, now = Date.now() } = {}) {
+    if (this.state !== 'navigating') return [];
+    this.pose = pose;
+    if (localization < LOC_MIN) {
+      this.needsRelocalize = true;
+      return this._halt('localization_lost', this.t.locLost, HAPTIC.lost);
+    }
+    while (this.waypoints.length) {
+      const last = this.waypoints.length === 1;
+      if (dist(pose, this.waypoints[0]) <= (last ? GOAL_TOL_CM : WP_TOL_CM)) this.waypoints.shift();
+      else break;
+    }
+    if (!this.waypoints.length) {
+      this.state = 'arrived';
+      return [
+        { type: 'say', text: this.t.arrived(this.destName(this.dest)) },
+        { type: 'state', state: this.state, reason: null },
+      ];
+    }
+    const ev = [];
+    const wp = this.waypoints[0];
+    const ins = instruction(pose, wp, this.settings.lang);
+    const newSegment = this._announced !== wp;
+    const offCourse = Math.abs(ins.rel) > 45 && now - this._lastSay > REPEAT_OFF_COURSE_MS;
+    if (newSegment || offCourse) {
+      ev.push({ type: 'say', text: ins.text });
+      this._announced = wp;
+      this._lastSay = now;
+    }
+    if (now - this._lastHaptic >= HAPTIC_EVERY_MS) {
+      const h = hapticFor(ins.rel);
+      if (h.pattern.length) {
+        ev.push({ type: 'haptic', ...h });
+        this._lastHaptic = now;
+      }
+    }
+    return ev;
+  }
+
+  // A new object was detected. Replan only if it actually blocks the route.
+  addObstacle(rect, pose, now = Date.now()) {
+    this.grid.setRect(rect.x0, rect.y0, rect.x1, rect.y1, rect.height);
+    if (this.state !== 'navigating') return [];
+    this.analysis = analyze(this.grid, this.settings);
+    if (routeIsClear(this.grid, this.analysis, pose, this.waypoints)) return [];
+    const ev = [{ type: 'say', text: this.t.obstacle }];
+    const res = plan(this.grid, this.settings, pose, this.dest.pos, this.analysis);
+    if (!res.ok) {
+      this.waypoints = [];
+      return ev.concat(this._halt('no_route', this.t.noRoute, HAPTIC.lost));
+    }
+    this.waypoints = res.waypoints;
+    this._announced = null;
+    return ev.concat(this.update(pose, { localization: 1, now }));
+  }
+
+  stop() {
+    this.state = 'stopped';
+    this.reason = 'user_stop';
+    return [
+      { type: 'say', text: this.t.stopped },
+      { type: 'state', state: this.state, reason: this.reason },
+    ];
+  }
+
+  // The user (or a re-scan) confirms where they are after localization was lost.
+  relocalize(pose) {
+    this.pose = pose;
+    this.needsRelocalize = false;
+    return [];
+  }
+
+  resume(pose, now = Date.now()) {
+    if (!this.dest) return [{ type: 'say', text: this.t.notNavigating }];
+    if (this.needsRelocalize) return [{ type: 'say', text: this.t.needRelocalize }];
+    const res = this._plan(pose);
+    if (!res.ok) return this._halt(res.reason, this.t.noRoute);
+    this.waypoints = res.waypoints;
+    this.state = 'navigating';
+    this.reason = null;
+    this._announced = null;
+    return [
+      { type: 'say', text: this.t.resumed },
+      { type: 'state', state: this.state, reason: null },
+    ].concat(this.update(pose, { localization: 1, now }));
+  }
+
+  repeat(pose, now = Date.now()) {
+    if (this.state !== 'navigating' || !this.waypoints.length) return [{ type: 'say', text: this.t.notNavigating }];
+    return [{ type: 'say', text: instruction(pose, this.waypoints[0], this.settings.lang).text }];
+  }
+
+  where(pose) {
+    let best = null;
+    for (const d of this.destinations) {
+      const m = dist(pose, d.pos);
+      if (!best || m < best.m) best = { d, m };
+    }
+    if (!best) return [{ type: 'say', text: this.t.unknown }];
+    const meters = roundMeters(best.m);
+    const hour = clockHour(relativeBearing(pose, best.d.pos));
+    return [{ type: 'say', text: this.t.where(this.destName(best.d), hour, this.t.num(meters), this.t.unit(meters)) }];
+  }
+
+  // Dispatch a parsed voice command.
+  handle(cmd, pose, now = Date.now()) {
+    switch (cmd.type) {
+      case 'stop': return this.stop();
+      case 'repeat': return this.repeat(pose, now);
+      case 'where': return this.where(pose);
+      case 'resume': return this.resume(pose, now);
+      case 'go': return cmd.dest ? this.goTo(cmd.dest, pose, now) : [{ type: 'say', text: this.t.unknown }];
+      default: return [{ type: 'say', text: this.t.unknown }];
+    }
+  }
+}
+
+// Simulated apartment used by the demo and the tests.
+// 6 m x 5 m. A dividing wall at x = 3 m with three openings:
+//   A: 60 cm gap (the passage a wheelchair must avoid)
+//   C: 100 cm gap
+//   B: 90 cm door with a 4 cm threshold
+
+function buildDemoRoom() {
+  const g = new Grid(600, 500);
+  g.addBorder(5);
+  // dividing wall with gaps at y 100-160 (A), 200-300 (C), 330-420 (B)
+  g.setRect(295, 0, 305, 100, WALL);
+  g.setRect(295, 160, 305, 200, WALL);
+  g.setRect(295, 300, 305, 330, WALL);
+  g.setRect(295, 420, 305, 500, WALL);
+  g.setRect(295, 330, 305, 420, 4); // threshold in door B
+  g.setRect(100, 150, 200, 250, 75); // table
+  g.setRect(420, 380, 580, 480, 50); // bed
+  g.setRect(350, 200, 450, 300, 1); // rug (passable)
+  return g;
+}
+
+const DESTINATIONS = [
+  { id: 'door', pos: { x: 60, y: 60 }, names: { mk: ['врата', 'влез'], en: ['door', 'entrance'] } },
+  { id: 'table', pos: { x: 150, y: 290 }, names: { mk: ['маса'], en: ['table'] } },
+  { id: 'kitchen', pos: { x: 540, y: 110 }, names: { mk: ['кујна'], en: ['kitchen'] } },
+  { id: 'bed', pos: { x: 380, y: 430 }, names: { mk: ['кревет'], en: ['bed'] } },
+];
+
+const START_POSE = { x: 50, y: 110, heading: 90 };
+
+// Browser UI: profile, clock dial, simulator map, voice/haptic output.
+
+
+
+
+
+
+
+
+const $ = (id) => document.getElementById(id);
+const SCALE = 2.4; // canvas px per cm (canvas is 1440 x 1200 for a 600 x 500 cm room)
+const TICK_MS = 200;
+const WALK_CM_PER_TICK = 20; // about 1 m/s
+const TURN_DEG_PER_TICK = 40;
+
+const I18N = {
+  mk: {
+    tagline: 'Упатства во метри и по часовник, за луѓе што не гледаат и за корисници на колички.',
+    theme: 'Светла или темна тема', dialLabel: 'Часовник што покажува каде да свртиш', mapLabel: 'Мапа на просторијата',
+    console: 'Сега', toNext: 'до следната точка', goTo: 'Оди до', command: 'Команда', cmdPh: 'оди до кујна', mic: 'Говор',
+    simulate: 'Симулатор', stop: 'Стоп', resume: 'Продолжи', lose: 'Изгуби локализација', reloc: 'Потврди локација', reset: 'Рестарт',
+    map: 'Просторија 6 × 5 m, мрежа од 5 cm',
+    lgWall: 'Ѕид, мебел', lgLow: 'Низок, поминлив', lgTight: 'Претесно за профилот', lgRoute: 'Рута',
+    hint: 'Кликни на мапата за да се појави нов предмет од 40 cm.',
+    profile: 'Профил', preset: 'Основа',
+    p_blind: 'Слеп', p_low: 'Слабовиден', p_wheel: 'Количка', p_comb: 'Количка и слабовиден',
+    acuity: 'Острина на вид по корекција', acuityHelp: 'Не диоптрија. На пример 0,1 е 20/200, мерено со очила или леќи.',
+    fieldLoss: 'Видно поле', light: 'Светлосна перцепција', width: 'Ширина на количка (cm)', thr: 'Најголем праг (cm)',
+    approved: 'Профилот го потврдил',
+    'o_field_none': 'Нормално', 'o_field_tunnel': 'Тунелски вид', 'o_field_left': 'Губиток лево', 'o_field_right': 'Губиток десно', 'o_field_central': 'Централен губиток',
+    'o_light_normal': 'Нормална', 'o_light_light-only': 'Само светлина и сенка', 'o_light_none': 'Нема',
+    'o_approved_self': 'Јас сам', 'o_approved_professional': 'Стручно лице (О&М или лекар)',
+    dPass: 'најмал премин', dStep: 'највисок праг', dOut: 'излез',
+    out_voice: 'глас + вибрација', out_screen: 'глас + вибрација + екран',
+    log: 'Дневник', vault: 'Енкриптирано на уредот', pass: 'Лозинка', vaultHelp: 'Мапата и профилот се чуваат само во овој прелистувач, шифрирани со AES-GCM.',
+    save: 'Зачувај', load: 'Вчитај',
+    note: 'Ова е симулатор. Локализацијата е симулирана и профилот не е клинички валидиран. Не е замена за бастон или куче водич.',
+    idle: 'Подготвен',
+    idleHelp: 'Избери место или кажи „оди до кујна“.',
+    navigating: 'Навигација до', stopped: 'Застанато', arrived: 'Стигнато',
+    reasons: { localization_lost: 'изгубена локализација', no_route: 'нема безбеден пат', goal_blocked: 'целта не е достапна', start_out: 'надвор од мапата', user_stop: 'стоп' },
+    total: (d, m) => `Вкупно до ${d}: ${m} m`,
+    haptic: { left: 'две лесни: лево', right: 'една силна: десно', lost: 'долга: стоп', none: '' },
+    warn: {
+      unverified: 'Профилот не е потврден од стручно лице. Користи го само за тестирање.',
+      preset_conflict: 'Избраната основа е построга од бројките, па важи построгото.',
+      invalid: 'Невалиден внес: ',
+      clamped: 'Вредноста е прилагодена: ',
+    },
+    fields: { acuity: 'острина', widthCm: 'ширина', maxThresholdCm: 'праг' },
+    saved: 'Зачувано, шифрирано.', loaded: 'Вчитано.', none: 'Нема зачувано.', wrong: 'Погрешна лозинка.', needPass: 'Внеси лозинка.', noStore: 'Прелистувачот не дозволува зачувување.',
+    micNo: 'Микрофонот не е достапен тука. Користи го полето.',
+    locOk: 'Локацијата е потврдена.', resetDone: 'Демото е вратено на почеток.',
+    noScreen: 'Профил без екран: само глас и вибрации. Мапата е скриена.',
+    dests: { door: 'Врата', table: 'Маса', kitchen: 'Кујна', bed: 'Кревет' },
+    lang: 'mk-MK',
+  },
+  en: {
+    tagline: 'Directions in metres and clock positions, for blind and low-vision people and wheelchair users.',
+    theme: 'Light or dark theme', dialLabel: 'Clock showing where to turn', mapLabel: 'Room map',
+    console: 'Now', toNext: 'to next point', goTo: 'Go to', command: 'Command', cmdPh: 'go to kitchen', mic: 'Speak',
+    simulate: 'Simulator', stop: 'Stop', resume: 'Resume', lose: 'Lose localization', reloc: 'Confirm location', reset: 'Restart',
+    map: 'Room 6 × 5 m, 5 cm grid',
+    lgWall: 'Wall, furniture', lgLow: 'Low, passable', lgTight: 'Too tight for profile', lgRoute: 'Route',
+    hint: 'Click the map to drop a new 40 cm object.',
+    profile: 'Profile', preset: 'Preset',
+    p_blind: 'Blind', p_low: 'Low vision', p_wheel: 'Wheelchair', p_comb: 'Wheelchair and low vision',
+    acuity: 'Corrected visual acuity', acuityHelp: 'Not diopters. For example 0.1 is 20/200, measured with glasses or lenses.',
+    fieldLoss: 'Visual field', light: 'Light perception', width: 'Wheelchair width (cm)', thr: 'Highest threshold (cm)',
+    approved: 'Profile confirmed by',
+    'o_field_none': 'Normal', 'o_field_tunnel': 'Tunnel vision', 'o_field_left': 'Left loss', 'o_field_right': 'Right loss', 'o_field_central': 'Central loss',
+    'o_light_normal': 'Normal', 'o_light_light-only': 'Light and shadow only', 'o_light_none': 'None',
+    'o_approved_self': 'Myself', 'o_approved_professional': 'Professional (O&M or doctor)',
+    dPass: 'narrowest passage', dStep: 'highest threshold', dOut: 'output',
+    out_voice: 'voice + haptics', out_screen: 'voice + haptics + screen',
+    log: 'Log', vault: 'Encrypted on this device', pass: 'Passphrase', vaultHelp: 'The map and profile stay in this browser only, encrypted with AES-GCM.',
+    save: 'Save', load: 'Load',
+    note: 'This is a simulator. Localization is simulated and the profile is not clinically validated. It does not replace a cane or a guide dog.',
+    idle: 'Ready',
+    idleHelp: 'Pick a place or say "go to kitchen".',
+    navigating: 'Navigating to', stopped: 'Stopped', arrived: 'Arrived',
+    reasons: { localization_lost: 'localization lost', no_route: 'no safe route', goal_blocked: 'goal not reachable', start_out: 'outside the map', user_stop: 'stop' },
+    total: (d, m) => `Total to ${d}: ${m} m`,
+    haptic: { left: 'two light: left', right: 'one strong: right', lost: 'long: stop', none: '' },
+    warn: {
+      unverified: 'Profile not verified by a professional. Use for testing only.',
+      preset_conflict: 'The chosen preset is stricter than the numbers, so the stricter one applies.',
+      invalid: 'Invalid input: ',
+      clamped: 'Value adjusted: ',
+    },
+    fields: { acuity: 'acuity', widthCm: 'width', maxThresholdCm: 'threshold' },
+    saved: 'Saved, encrypted.', loaded: 'Loaded.', none: 'Nothing saved.', wrong: 'Wrong passphrase.', needPass: 'Enter a passphrase.', noStore: 'This browser blocks saving.',
+    micNo: 'Microphone not available here. Use the text box.',
+    locOk: 'Location confirmed.', resetDone: 'Demo restored.',
+    noScreen: 'Screenless profile: voice and haptics only. Map hidden.',
+    dests: { door: 'Door', table: 'Table', kitchen: 'Kitchen', bed: 'Bed' },
+    lang: 'en-US',
+  },
+};
+
+let L = I18N.mk;
+let grid = buildDemoRoom();
+let pose = { ...START_POSE };
+let settings;
+let nav;
+let analysis;
+let localization = 1;
+let profileInput = {};
+let lastSay = '';
+let hapticTimer;
+
+const PRESET_DEFAULTS = {
+  blind: { acuity: 0, light: 'none', field: 'none' },
+  lowvision: { acuity: 0.15, light: 'normal', field: 'none' },
+  wheelchair: { acuity: 1, light: 'normal', field: 'none' },
+  combined: { acuity: 0.15, light: 'normal', field: 'none' },
+};
+
+const preset = () => document.querySelector('input[name="preset"]:checked').value;
+const hasChair = () => ['wheelchair', 'combined'].includes(preset());
+
+function applyLang() {
+  L = I18N[$('lang').value] ?? I18N.mk;
+  document.documentElement.lang = $('lang').value;
+  document.querySelectorAll('[data-i18n]').forEach((el) => (el.textContent = L[el.dataset.i18n]));
+  document.querySelectorAll('[data-i18n-ph]').forEach((el) => (el.placeholder = L[el.dataset.i18nPh]));
+  document.querySelectorAll('[data-i18n-aria]').forEach((el) => el.setAttribute('aria-label', L[el.dataset.i18nAria]));
+  for (const sel of ['field', 'light', 'approved']) {
+    for (const o of $(sel).options) o.textContent = L[`o_${sel}_${o.value}`];
+  }
+  $('legend').innerHTML = '';
+  for (const [color, key] of [['var(--m-wall)', 'lgWall'], ['var(--m-low)', 'lgLow'], ['var(--m-tight)', 'lgTight'], ['var(--m-path)', 'lgRoute']]) {
+    const s = document.createElement('span');
+    const b = document.createElement('b');
+    b.style.background = color;
+    s.append(b, L[key]);
+    $('legend').append(s);
+  }
+}
+
+function readForm() {
+  return {
+    preset: preset(),
+    acuity: $('acuity').value,
+    fieldLoss: $('field').value,
+    lightPerception: $('light').value,
+    wheelchair: hasChair(),
+    widthCm: $('width').value,
+    maxThresholdCm: $('thr').value,
+    approvedBy: $('approved').value,
+    lang: $('lang').value,
+  };
+}
+
+function writeForm(p) {
+  document.querySelector(`input[name="preset"][value="${p.preset}"]`).checked = true;
+  $('acuity').value = p.acuity;
+  $('field').value = p.fieldLoss;
+  $('light').value = p.lightPerception;
+  $('width').value = p.widthCm;
+  $('thr').value = p.maxThresholdCm;
+  $('approved').value = p.approvedBy;
+  $('lang').value = p.lang;
+}
+
+function fillPresetDefaults() {
+  const d = PRESET_DEFAULTS[preset()];
+  $('acuity').value = d.acuity;
+  $('light').value = d.light;
+  $('field').value = d.field;
+}
+
+const fmt = (n) => String(n).replace('.', L === I18N.mk ? ',' : '.');
+
+function log(text) {
+  const li = document.createElement('li');
+  const t = document.createElement('small');
+  t.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  li.append(t, text);
+  $('log').prepend(li);
+  while ($('log').children.length > 50) $('log').lastChild.remove();
+}
+
+function speak(text) {
+  lastSay = text;
+  $('instruction').textContent = text;
+  log(text);
+  try {
+    if (!('speechSynthesis' in window)) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = L.lang;
+    speechSynthesis.speak(u);
+  } catch {
+    /* speech is best-effort; the instruction box is the fallback */
+  }
+}
+
+function buzz(side, pattern) {
+  const pads = side === 'left' ? ['hapL'] : side === 'right' ? ['hapR'] : ['hapL', 'hapR'];
+  for (const id of ['hapL', 'hapR']) $(id).classList.remove('on', 'lost');
+  for (const id of pads) {
+    $(id).classList.add('on');
+    if (side === 'lost') $(id).classList.add('lost');
+  }
+  $('hapText').textContent = L.haptic[side] ?? '';
+  clearTimeout(hapticTimer);
+  hapticTimer = setTimeout(() => {
+    for (const id of ['hapL', 'hapR']) $(id).classList.remove('on', 'lost');
+    $('hapText').textContent = '';
+  }, 900);
+  try {
+    navigator.vibrate?.(pattern);
+  } catch {
+    /* ignore */
+  }
+}
+
+function dispatch(events) {
+  for (const e of events) {
+    if (e.type === 'say') speak(e.text);
+    else if (e.type === 'haptic') buzz(e.side, e.pattern);
+  }
+  updateStatus();
+  render();
+}
+
+function updateStatus() {
+  const el = $('status');
+  let text = L.idle;
+  if (nav.state === 'navigating') text = `${L.navigating} ${nav.destName(nav.dest)}`;
+  else if (nav.state === 'stopped') text = `${L.stopped}: ${L.reasons[nav.reason] ?? nav.reason}`;
+  else if (nav.state === 'arrived') text = `${L.arrived}: ${nav.destName(nav.dest)}`;
+  $('statusText').textContent = text;
+  el.className = `status ${nav.state}`;
+  if (!lastSay && nav.state === 'idle') $('instruction').textContent = L.idleHelp;
+}
+
+function buildDestButtons() {
+  const box = $('dests');
+  box.replaceChildren();
+  for (const d of DESTINATIONS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn ghost';
+    b.textContent = L.dests[d.id];
+    b.addEventListener('click', () => dispatch(nav.goTo(d.id, pose)));
+    box.append(b);
+  }
+}
+
+function applyProfile() {
+  profileInput = readForm();
+  const { profile, warnings } = makeProfile(profileInput);
+  settings = deriveSettings(profile);
+  $('warnings').replaceChildren(
+    ...warnings.map((w) => {
+      const li = document.createElement('li');
+      li.textContent = (L.warn[w.code] ?? w.code) + (w.field ? (L.fields[w.field] ?? w.field) : '');
+      return li;
+    }),
+  );
+  const root = document.documentElement;
+  if (settings.highContrast) root.dataset.contrast = 'high';
+  else delete root.dataset.contrast;
+  root.style.setProperty('--fs', settings.fontScale);
+  $('wheelFields').hidden = !hasChair();
+  $('map').parentElement.hidden = !settings.screen;
+  $('legend').hidden = !settings.screen;
+  $('screenoff').hidden = settings.screen;
+  $('screenoff').textContent = L.noScreen;
+  $('hint').textContent = settings.screen ? L.hint : '';
+  $('dPass').textContent = `${Math.round(2 * (settings.halfWidthCm + settings.marginCm))} cm`;
+  $('dStep').textContent = `${settings.maxStepCm} cm`;
+  $('dOut').textContent = settings.screen ? L.out_screen : L.out_voice;
+  $('dOut').style.fontSize = '.8em';
+
+  const prev = nav;
+  nav = new Navigator({ grid, destinations: DESTINATIONS, settings });
+  if (prev?.dest && prev.state === 'navigating') {
+    dispatch(nav.goTo(prev.dest.id, pose));
+  }
+  analysis = analyze(grid, settings);
+  buildDestButtons();
+  updateStatus();
+  render();
+}
+
+function refreshText() {
+  applyLang();
+  applyProfile();
+}
+
+// --- simulated user: follows the guidance at walking pace --------------------
+function simTick() {
+  if (nav.state !== 'navigating' || !nav.waypoints.length) return;
+  const wp = nav.waypoints[0];
+  const rel = relativeBearing(pose, wp);
+  const turn = Math.max(-TURN_DEG_PER_TICK, Math.min(TURN_DEG_PER_TICK, rel));
+  pose.heading = (pose.heading + turn + 360) % 360;
+  if (Math.abs(rel) < 25) {
+    const rad = (pose.heading * Math.PI) / 180;
+    pose.x += Math.sin(rad) * WALK_CM_PER_TICK;
+    pose.y -= Math.cos(rad) * WALK_CM_PER_TICK;
+  }
+  dispatch(nav.update(pose, { localization, now: performance.now() }));
+}
+
+// --- dial --------------------------------------------------------------------
+const NS = 'http://www.w3.org/2000/svg';
+function el(name, attrs = {}, text) {
+  const e = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function buildDial() {
+  const svg = $('dial');
+  svg.append(el('circle', { cx: 110, cy: 110, r: 104, class: 'ring' }));
+  for (let h = 1; h <= 12; h++) {
+    const a = (h * 30 * Math.PI) / 180;
+    const x = 110 + Math.sin(a) * 86;
+    const y = 110 - Math.cos(a) * 86;
+    svg.append(el('circle', { id: `hb${h}`, cx: x, cy: y, r: 13, class: 'hitbg', opacity: 0 }));
+    svg.append(el('text', { id: `ht${h}`, x, y }, String(h)));
+    svg.append(el('line', { x1: 110 + Math.sin(a) * 100, y1: 110 - Math.cos(a) * 100, x2: 110 + Math.sin(a) * 96, y2: 110 - Math.cos(a) * 96, class: 'tick' }));
+  }
+  const needle = el('g', { id: 'needle', class: 'needle', style: 'transform-origin:110px 110px', visibility: 'hidden' });
+  needle.append(el('path', { d: 'M110 38 L121 110 L110 122 L99 110 Z', fill: 'var(--primary)' }));
+  svg.append(needle);
+  svg.append(el('circle', { cx: 110, cy: 110, r: 8, class: 'you' }));
+}
+
+function updateReadout() {
+  const wp = nav.state === 'navigating' ? nav.waypoints[0] : null;
+  for (let h = 1; h <= 12; h++) {
+    $(`hb${h}`).setAttribute('opacity', 0);
+    $(`ht${h}`).classList.remove('hit');
+  }
+  if (!wp) {
+    $('needle').setAttribute('visibility', 'hidden');
+    $('meters').textContent = '—';
+    $('clock').textContent = '—';
+    $('total').textContent = '';
+    return;
+  }
+  const rel = relativeBearing(pose, wp);
+  const hour = Math.abs(rel) < 15 ? 12 : clockHour(rel);
+  $('needle').setAttribute('visibility', 'visible');
+  $('needle').style.transform = `rotate(${rel}deg)`;
+  $(`hb${hour}`).setAttribute('opacity', 1);
+  $(`ht${hour}`).classList.add('hit');
+  const m = roundMeters(Math.hypot(wp.x - pose.x, wp.y - pose.y));
+  $('meters').textContent = fmt(m);
+  $('clock').textContent = L === I18N.mk ? `${hour} часот` : `${hour} o'clock`;
+  let len = 0;
+  let prev = pose;
+  for (const w of nav.waypoints) {
+    len += Math.hypot(w.x - prev.x, w.y - prev.y);
+    prev = w;
+  }
+  $('total').textContent = L.total(nav.destName(nav.dest), fmt(roundMeters(len)));
+}
+
+// --- map ---------------------------------------------------------------------
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function render() {
+  updateReadout();
+  const cv = $('map');
+  if (!settings.screen) return;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = cssVar('--m-floor');
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  const s = CELL_CM * SCALE;
+  const wall = cssVar('--m-wall');
+  const obst = cssVar('--m-obst');
+  const low = cssVar('--m-low');
+  const tight = cssVar('--m-tight');
+  for (let r = 0; r < grid.rows; r++) {
+    for (let c = 0; c < grid.cols; c++) {
+      const i = grid.idx(c, r);
+      const h = grid.h[i];
+      if (h > 0) ctx.fillStyle = h >= WALL ? wall : h > settings.maxStepCm ? obst : low;
+      else if (!analysis.passable[i]) ctx.fillStyle = tight;
+      else continue;
+      ctx.fillRect(c * s, r * s, s + 0.5, s + 0.5);
+    }
+  }
+  const ink = cssVar('--ink');
+  const primary = cssVar('--m-path');
+  ctx.font = `600 ${26 * Math.max(1, settings.fontScale * 0.85)}px ${cssVar('--f-body')}`;
+  ctx.textBaseline = 'middle';
+  for (const d of DESTINATIONS) {
+    const x = d.pos.x * SCALE;
+    const y = d.pos.y * SCALE;
+    ctx.fillStyle = cssVar('--surface');
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, 7);
+    ctx.fill();
+    ctx.stroke();
+    const label = L.dests[d.id];
+    const w = ctx.measureText(label).width;
+    const lx = x + 20 + w > cv.width - 10 ? x - 20 - w : x + 20;
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = cssVar('--m-floor');
+    ctx.strokeText(label, lx, y);
+    ctx.fillStyle = ink;
+    ctx.fillText(label, lx, y);
+  }
+  if (nav.state === 'navigating' && nav.waypoints.length) {
+    ctx.strokeStyle = primary;
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.setLineDash([22, 14]);
+    ctx.beginPath();
+    ctx.moveTo(pose.x * SCALE, pose.y * SCALE);
+    for (const w of nav.waypoints) ctx.lineTo(w.x * SCALE, w.y * SCALE);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = primary;
+    for (const w of nav.waypoints) {
+      ctx.beginPath();
+      ctx.arc(w.x * SCALE, w.y * SCALE, 9, 0, 7);
+      ctx.fill();
+    }
+  }
+  ctx.save();
+  ctx.translate(pose.x * SCALE, pose.y * SCALE);
+  ctx.rotate((pose.heading * Math.PI) / 180);
+  const lost = localization < 0.6;
+  ctx.fillStyle = lost ? cssVar('--danger') : ink;
+  ctx.strokeStyle = cssVar('--m-floor');
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(0, -32);
+  ctx.lineTo(22, 24);
+  ctx.lineTo(0, 12);
+  ctx.lineTo(-22, 24);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
+}
+
+// --- input -------------------------------------------------------------------
+function runCommand(text) {
+  if (!text.trim()) return;
+  dispatch(nav.handle(parseCommand(text, DESTINATIONS), pose, performance.now()));
+}
+
+function setupMic() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    $('micBtn').disabled = true;
+    return;
+  }
+  $('micBtn').addEventListener('click', () => {
+    try {
+      const rec = new SR();
+      rec.lang = L.lang;
+      // Ask for on-device recognition where supported. The real build must ship an offline model.
+      if ('processLocally' in rec) rec.processLocally = true;
+      rec.onresult = (ev) => {
+        const text = ev.results[0][0].transcript;
+        $('cmd').value = text;
+        runCommand(text);
+      };
+      rec.onerror = () => log(L.micNo);
+      rec.start();
+    } catch {
+      log(L.micNo);
+    }
+  });
+}
+
+function vaultMsg(text) {
+  $('vaultMsg').textContent = text;
+}
+
+function reset() {
+  grid = buildDemoRoom();
+  pose = { ...START_POSE };
+  localization = 1;
+  lastSay = '';
+  $('instruction').textContent = L.idleHelp;
+  applyProfile();
+  log(L.resetDone);
+}
+
+$('presets').addEventListener('change', () => {
+  fillPresetDefaults();
+  applyProfile();
+});
+for (const id of ['acuity', 'field', 'light', 'width', 'thr', 'approved']) $(id).addEventListener('change', applyProfile);
+$('lang').addEventListener('change', refreshText);
+$('themeBtn').addEventListener('click', () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  root.dataset.theme = dark ? 'light' : 'dark';
+  render();
+});
+$('cmdBtn').addEventListener('click', () => runCommand($('cmd').value));
+$('cmd').addEventListener('keydown', (e) => e.key === 'Enter' && runCommand($('cmd').value));
+$('stopBtn').addEventListener('click', () => dispatch(nav.stop()));
+$('resumeBtn').addEventListener('click', () => dispatch(nav.resume(pose, performance.now())));
+$('lostBtn').addEventListener('click', () => {
+  localization = 0.3;
+  const ev = nav.update(pose, { localization, now: performance.now() });
+  if (!ev.length) nav.needsRelocalize = true; // not navigating: still require confirmation
+  dispatch(ev);
+});
+$('relocBtn').addEventListener('click', () => {
+  localization = 1;
+  nav.relocalize(pose);
+  log(L.locOk);
+  render();
+});
+$('resetBtn').addEventListener('click', reset);
+$('map').addEventListener('click', (e) => {
+  const rect = $('map').getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * 600;
+  const y = ((e.clientY - rect.top) / rect.height) * 500;
+  const ev = nav.addObstacle({ x0: x - 20, y0: y - 20, x1: x + 20, y1: y + 20, height: 40 }, pose, performance.now());
+  analysis = analyze(grid, settings);
+  dispatch(ev);
+});
+$('saveBtn').addEventListener('click', async () => {
+  const pass = $('pass').value;
+  if (!pass) return vaultMsg(L.needPass);
+  try {
+    await save(localStorage, { grid: grid.toJSON(), profile: profileInput }, pass);
+    vaultMsg(L.saved);
+  } catch {
+    vaultMsg(L.noStore);
+  }
+});
+$('loadBtn').addEventListener('click', async () => {
+  const pass = $('pass').value;
+  if (!pass) return vaultMsg(L.needPass);
+  try {
+    const data = await load(localStorage, pass);
+    if (!data) return vaultMsg(L.none);
+    grid = Grid.fromJSON(data.grid);
+    writeForm(data.profile);
+    applyLang();
+    applyProfile();
+    vaultMsg(L.loaded);
+  } catch (err) {
+    vaultMsg(err.message === 'wrong_passphrase_or_corrupted' ? L.wrong : L.noStore);
+  }
+});
+
+buildDial();
+applyLang();
+fillPresetDefaults();
+applyProfile();
+setupMic();
+setInterval(simTick, TICK_MS);
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', render);
+
+})();
+</script>
+</body>
+</html>

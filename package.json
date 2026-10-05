@@ -6,6 +6,6 @@
   "description": "Навигатор — indoor navigation for blind, low-vision and wheelchair users (simulator MVP)",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "start": "node server.js"
+    "build": "node build.mjs"
   }
 }
