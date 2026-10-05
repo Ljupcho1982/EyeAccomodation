@@ -3,6 +3,7 @@ package mk.navigator
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.view.Gravity
@@ -18,11 +19,14 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.AugmentedImageDatabase
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.UnavailableException
 import org.json.JSONObject
+
+private const val MARKER_WIDTH_M = 0.20f
 
 class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
@@ -105,6 +109,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** The wall marker (printed 20 cm wide) is the only image ARCore looks for. */
+    private fun markerDatabase(s: Session): AugmentedImageDatabase {
+        val db = AugmentedImageDatabase(s)
+        try {
+            assets.open("navigator-marker.png").use { db.addImage("navigator", BitmapFactory.decodeStream(it), MARKER_WIDTH_M) }
+        } catch (e: Exception) {
+            note("marker_quality") // ARCore rejected the image: the app still works with "confirm location"
+        }
+        return db
+    }
+
     private fun startSession() {
         try {
             if (session == null) {
@@ -120,6 +135,7 @@ class MainActivity : AppCompatActivity() {
                         planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
                         updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                         focusMode = Config.FocusMode.AUTO
+                        augmentedImageDatabase = markerDatabase(s)
                     })
                 }
             }

@@ -13,25 +13,51 @@ export function trackingToLocalization(state) {
   return 0;
 }
 
-// Maps ARCore world coordinates onto the saved map. The first tracked frame is
-// pinned to `home` ({x, y, heading} in map cm/deg): the user starts each session
-// standing at the saved home spot, facing the saved direction.
-export class Aligner {
-  constructor(home) {
-    this.home = home;
-    this.ready = false;
-  }
+// The map frame is tied to something the user can find again, because ARCore starts every
+// session with a new, arbitrary world frame:
+//   'marker': a printed image on a wall. Its position is map `home`; its outward normal
+//             points to MARKER_HEADING on the map (the room extends away from the wall).
+//   'start' : no marker. The user stands at `home` facing `home.heading` and confirms.
+// A saved map remembers which kind it uses (`expected`) and refuses the other one.
+export const MARKER_HEADING = 180;
 
-  // f: { x, z, fx, fz } camera position and horizontal forward vector in ARCore world.
-  start(f) {
-    this.x0 = f.x;
-    this.z0 = f.z;
-    this.delta = this.home.heading - Aligner.headingOf(f);
-    this.ready = true;
+export class Aligner {
+  constructor(home, expected = null) {
+    this.home = home;
+    this.expected = expected;
+    this.ready = false;
+    this.kind = null;
   }
 
   static headingOf(f) {
     return (Math.atan2(f.fx, -f.fz) * 180) / Math.PI;
+  }
+
+  canUse(kind) {
+    return this.expected === null || this.expected === kind;
+  }
+
+  // f: { x, z, fx, fz } camera position and horizontal forward vector in ARCore world.
+  startFromCamera(f) {
+    if (!this.canUse('start')) return false;
+    this._pin(f.x, f.z, this.home.heading - Aligner.headingOf(f), 'start');
+    return true;
+  }
+
+  // m: { x, z, nx, nz } marker centre and horizontal outward normal in ARCore world.
+  startFromMarker(m) {
+    if (!this.canUse('marker')) return false;
+    this._pin(m.x, m.z, MARKER_HEADING - Aligner.headingOf({ fx: m.nx, fz: m.nz }), 'marker');
+    return true;
+  }
+
+  _pin(x, z, delta, kind) {
+    this.x0 = x;
+    this.z0 = z;
+    this.delta = delta;
+    this.kind = kind;
+    this.expected = kind;
+    this.ready = true;
   }
 
   point(x, z) {
@@ -87,12 +113,19 @@ export class PointMap {
 }
 
 // One ARCore frame in, navigation events out.
+// `anchored` is set on the frame where the map frame was (re)pinned to a marker.
 export function handleFrame({ f, nav, aligner, pointMap, now }) {
   const loc = trackingToLocalization(f.tracking);
-  if (!aligner.ready) {
-    if (f.tracking !== 'TRACKING') return { pose: null, events: [] };
-    aligner.start(f);
+  let anchored = null;
+  // A marker in view pins the map frame. Once guidance is running, only re-pin while
+  // stopped: a sudden shift of the map under a walking user is worse than some drift.
+  if (f.marker && loc === TRACKING_OK && (!aligner.ready || nav.state !== 'navigating')) {
+    if (aligner.startFromMarker(f.marker)) {
+      anchored = 'marker';
+      nav.needsRelocalize = false;
+    }
   }
+  if (!aligner.ready) return { pose: null, events: [], anchored };
   const pose = aligner.pose(f);
   const events = [];
   if (loc === TRACKING_OK && f.points?.length && f.floorY != null) {
@@ -100,5 +133,5 @@ export function handleFrame({ f, nav, aligner, pointMap, now }) {
     if (rects.length) events.push(...nav.addObstacles(rects, pose, now));
   }
   events.push(...nav.update(pose, { localization: loc, now }));
-  return { pose, events };
+  return { pose, events, anchored };
 }

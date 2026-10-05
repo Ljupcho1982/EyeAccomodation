@@ -3,6 +3,7 @@ package mk.navigator
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import com.google.ar.core.AugmentedImage
 import com.google.ar.core.Plane
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
@@ -73,11 +74,14 @@ class ArFrames(
                 .minOfOrNull { it.centerPose.ty() }
         }
 
+        val marker = findMarker(session)
+
         val sb = StringBuilder(4096)
         sb.append("{\"tracking\":\"").append(tracking).append("\",")
             .append("\"x\":").append(pose.tx()).append(",\"z\":").append(pose.tz()).append(',')
             .append("\"fx\":").append(fwd[0]).append(",\"fz\":").append(fwd[2]).append(',')
-            .append("\"floorY\":").append(floorY ?: "null").append(",\"points\":[")
+            .append("\"floorY\":").append(floorY ?: "null").append(",\"marker\":").append(marker ?: "null")
+            .append(",\"points\":[")
         if (tracking == "TRACKING") {
             val pc = frame.acquirePointCloud()
             try {
@@ -98,6 +102,20 @@ class ArFrames(
         }
         sb.append("]}")
         send(sb.toString())
+    }
+
+    /**
+     * The wall marker, when ARCore is fully tracking it: its centre and horizontal outward
+     * normal in ARCore world metres. Markers lying flat (floor, table) are ignored.
+     */
+    private fun findMarker(session: Session): String? {
+        val img = session.getAllTrackables(AugmentedImage::class.java).firstOrNull {
+            it.trackingState == TrackingState.TRACKING && it.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING
+        } ?: return null
+        val pose = img.centerPose
+        val n = pose.rotateVector(floatArrayOf(0f, 1f, 0f)) // the image's Y axis is its normal
+        if (Math.abs(n[1]) > 0.5f) return null
+        return "{\"x\":${pose.tx()},\"z\":${pose.tz()},\"nx\":${n[0]},\"nz\":${n[2]}}"
     }
 }
 

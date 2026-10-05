@@ -52,6 +52,9 @@ const I18N = {
     fields: { acuity: 'острина', widthCm: 'ширина', maxThresholdCm: 'праг' },
     saved: 'Зачувано, шифрирано.', loaded: 'Вчитано.', none: 'Нема зачувано.', wrong: 'Погрешна лозинка.', needPass: 'Внеси лозинка.', noStore: 'Прелистувачот не дозволува зачувување.',
     micNo: 'Микрофонот не е достапен тука. Користи го полето.',
+    anchorHint: 'Насочи ја камерата кон маркерот на ѕидот или кажи „потврди локација“ на почетната точка.',
+    markerFound: 'Маркерот е пронајден.', needTracking: 'Почекај, телефонот уште ја наоѓа околината.',
+    markerOnly: 'Оваа мапа користи маркер. Насочи ја камерата кон него.',
     locOk: 'Локацијата е потврдена.', resetDone: 'Демото е вратено на почеток.',
     noScreen: 'Профил без екран: само глас и вибрации. Мапата е скриена.',
     dests: { door: 'Врата', table: 'Маса', kitchen: 'Кујна', bed: 'Кревет' },
@@ -93,6 +96,9 @@ const I18N = {
     fields: { acuity: 'acuity', widthCm: 'width', maxThresholdCm: 'threshold' },
     saved: 'Saved, encrypted.', loaded: 'Loaded.', none: 'Nothing saved.', wrong: 'Wrong passphrase.', needPass: 'Enter a passphrase.', noStore: 'This browser blocks saving.',
     micNo: 'Microphone not available here. Use the text box.',
+    anchorHint: 'Point the camera at the marker on the wall, or say "confirm location" at the start point.',
+    markerFound: 'Marker found.', needTracking: 'Wait, the phone is still finding its surroundings.',
+    markerOnly: 'This map uses a marker. Point the camera at it.',
     locOk: 'Location confirmed.', resetDone: 'Demo restored.',
     noScreen: 'Screenless profile: voice and haptics only. Map hidden.',
     dests: { door: 'Door', table: 'Table', kitchen: 'Kitchen', bed: 'Bed' },
@@ -112,6 +118,8 @@ let destinations = AR ? [] : DESTINATIONS;
 let home = { ...AR_HOME };
 let pose = AR ? { ...AR_HOME } : { ...START_POSE };
 let aligner = new Aligner(home);
+let lastFrame = null;
+let hintAt = -Infinity;
 let pointMap = new PointMap(grid, aligner);
 let arTracking = 'STOPPED';
 let settings;
@@ -256,6 +264,17 @@ function updateStatus() {
   if (!lastSay && nav.state === 'idle') $('instruction').textContent = L.idleHelp;
 }
 
+// In the Android app nothing may start until the map frame is anchored to the real room.
+function anchored() {
+  if (!AR || aligner.ready) return true;
+  speak(L.anchorHint);
+  return false;
+}
+
+function go(id) {
+  if (anchored()) dispatch(nav.goTo(id, pose));
+}
+
 function buildDestButtons() {
   const box = $('dests');
   box.replaceChildren();
@@ -264,7 +283,7 @@ function buildDestButtons() {
     b.type = 'button';
     b.className = 'btn ghost';
     b.textContent = destLabel(d);
-    b.addEventListener('click', () => dispatch(nav.goTo(d.id, pose)));
+    b.addEventListener('click', () => go(d.id));
     box.append(b);
   }
 }
@@ -486,7 +505,21 @@ function render() {
 // --- input -------------------------------------------------------------------
 function runCommand(text) {
   if (!text.trim()) return;
-  dispatch(nav.handle(parseCommand(text, destinations), pose, performance.now()));
+  const cmd = parseCommand(text, destinations);
+  if (AR && cmd.type === 'confirm') return confirmLocation();
+  if (!anchored()) return;
+  dispatch(nav.handle(cmd, pose, performance.now()));
+}
+
+// "Confirm location" without a marker: the user says they stand at the saved start point.
+function confirmLocation() {
+  if (!lastFrame || lastFrame.tracking !== 'TRACKING') return speak(L.needTracking);
+  if (!aligner.startFromCamera(lastFrame)) return speak(L.markerOnly);
+  nav.needsRelocalize = false;
+  pose = aligner.pose(lastFrame);
+  speak(L.locOk);
+  persist();
+  render();
 }
 
 function setupMic() {
@@ -614,7 +647,7 @@ function persist() {
   saveTimer = setTimeout(() => {
     saveTimer = null;
     try {
-      window.Android.secureSave(JSON.stringify({ v: 1, grid: grid.toSparse(), home, destinations, profile: profileInput }));
+      window.Android.secureSave(JSON.stringify({ v: 2, grid: grid.toSparse(), home, anchor: aligner.expected, destinations, profile: profileInput }));
     } catch {
       /* the native side reports storage problems */
     }
@@ -629,7 +662,7 @@ function restore() {
     grid = Grid.fromSparse(d.grid);
     destinations = d.destinations;
     home = d.home;
-    aligner = new Aligner(home);
+    aligner = new Aligner(home, d.anchor ?? null);
     pointMap = new PointMap(grid, aligner);
     if (d.profile) {
       writeForm(d.profile);
@@ -644,8 +677,16 @@ function restore() {
 // { tracking, x, z, fx, fz, floorY, points: [x, y, z, ...] } in ARCore world metres.
 window.__arFrame = (f) => {
   arTracking = f.tracking;
+  lastFrame = f;
+  const wasReady = aligner.ready;
+  const wasLost = nav.state === 'stopped' && nav.reason === 'localization_lost';
   const r = handleFrame({ f, nav, aligner, pointMap, now: performance.now() });
   if (r.pose) pose = r.pose;
+  if (r.anchored && (!wasReady || wasLost)) speak(L.markerFound);
+  if (!aligner.ready && performance.now() - hintAt > 10000) {
+    hintAt = performance.now();
+    speak(L.anchorHint);
+  }
   dispatch(r.events);
   persist();
 };
@@ -660,6 +701,7 @@ const NOTES = {
     camera_denied: 'Треба дозвола за камера за да знам каде си.',
     camera_busy: 'Камерата е зафатена од друга апликација.',
     arcore_unavailable: 'ARCore не е достапен на овој телефон.',
+    marker_quality: 'ARCore не го прифати маркерот. Користи „потврди локација“.',
   },
   en: {
     tts_fallback: 'The Macedonian voice is not installed. Using a close voice.',
@@ -669,6 +711,7 @@ const NOTES = {
     camera_denied: 'Camera permission is needed to know where you are.',
     camera_busy: 'The camera is in use by another app.',
     arcore_unavailable: 'ARCore is not available on this phone.',
+    marker_quality: 'ARCore rejected the marker. Use "confirm location".',
   },
 };
 window.__arNote = (key) => {

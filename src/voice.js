@@ -13,6 +13,7 @@ const REPEAT = ['повтори', 'уште еднаш', 'repeat', 'say again'];
 const WHERE = ['каде сум', 'каде се наоѓам', 'where am i'];
 const RESUME = ['продолжи', 'продолжуваме', 'continue', 'resume'];
 const REMEMBER = ['запомни тука', 'запамти тука', 'запомни ова место', 'remember here', 'save here'];
+const CONFIRM = ['потврди локација', 'потврди ја локацијата', 'confirm location'];
 const GO = ['оди до', 'оди кон', 'одиме до', 'води ме до', 'одам до', 'go to', 'take me to', 'navigate to'];
 
 const has = (t, list) => list.some((w) => t === w || t.startsWith(w + ' ') || t.includes(' ' + w + ' ') || t.endsWith(' ' + w));
@@ -24,6 +25,7 @@ export function parseCommand(text, destinations = []) {
   for (const r of REMEMBER) {
     if (t.startsWith(r + ' ')) return { type: 'remember', name: t.slice(r.length).trim() };
   }
+  if (CONFIRM.some((c) => t.includes(c))) return { type: 'confirm' };
   if (has(t, STOP)) return { type: 'stop' };
   if (has(t, WHERE)) return { type: 'where' };
   if (has(t, REPEAT)) return { type: 'repeat' };

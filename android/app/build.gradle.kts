@@ -34,7 +34,12 @@ val copyWebApp by tasks.registering(Copy::class) {
     from(rootProject.file("../dist/index.html"))
     into(layout.buildDirectory.dir("generated/webapp"))
 }
-tasks.named("preBuild") { dependsOn(copyWebApp) }
+// The printed marker and the copy ARCore tracks are the same file.
+val copyMarker by tasks.registering(Copy::class) {
+    from(rootProject.file("../marker/navigator-marker.png"))
+    into(layout.buildDirectory.dir("generated/webapp"))
+}
+tasks.named("preBuild") { dependsOn(copyWebApp, copyMarker) }
 
 dependencies {
     implementation("com.google.ar:core:1.44.0")
